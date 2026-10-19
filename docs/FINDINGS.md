@@ -93,3 +93,11 @@ Before setting anything the add-on checks `r.ScreenPercentage` (float) and `r.Ma
 (int): vtables in `.rdata`, `IsVariableInt` false/true, `AsVariableFloat`/`AsVariableInt`
 returning `+0x38`, and GetFloat matching the stored value. On a mismatch it changes nothing and
 says so in the overlay and the log.
+
+## The EA-app executable
+
+Steam starts `starwarsjedifallenorder.exe`, not `SwGame-Win64-Shipping.exe`. It has the same
+PE timestamp, but its code is encrypted on disk (an extra `.ooa` section, EA's DRM wrapper)
+and decrypted only in memory, so offline analysis uses `SwGame-Win64-Shipping.exe`. At run
+time the add-on scans the decrypted image. `r.ScreenPercentage` alone is looked up only 4
+times, so the scan votes over 20 names (62 of 63 lookups agree on the singleton).

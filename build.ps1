@@ -37,7 +37,8 @@ Write-Host "Built $addon ($name $((Get-Item $addon).VersionInfo.FileVersion))"
 
 if ($Install) {
     if (-not (Test-Path "$GameBin\$exe")) { throw "$exe not found in $GameBin (pass -GameBin)" }
-    if (Get-Process ([IO.Path]::GetFileNameWithoutExtension($exe)) -ErrorAction SilentlyContinue) { throw "Close the game first." }
+    # Steam starts starwarsjedifallenorder.exe, a copy of the same executable.
+    if (Get-Process SwGame-Win64-Shipping, starwarsjedifallenorder -ErrorAction SilentlyContinue) { throw "Close the game first." }
     Copy-Item $addon $GameBin -Force
     Write-Host "Installed $name to $GameBin"
 }

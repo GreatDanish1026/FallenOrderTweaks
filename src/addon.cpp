@@ -179,7 +179,9 @@ bool FindManager() {
         cvars::ManagerScan s = cvars::ScanConsoleManager(g_base);
         Log("cvars: IConsoleManager::Singleton at %s (%d of %d lookups agree), FindConsoleVariable at +0x%x (%d of %d)",
             s.singleton ? Where(s.singleton).c_str() : "?", s.votes, s.matches, s.findOffset, s.findVotes, s.findMatches);
-        if (!s.singleton || s.votes < 10) return Unsupported("IConsoleManager::Singleton not found"), false;
+        // Most lookups must agree (offline over 38 names: 120 of 121).
+        if (!s.singleton || s.votes < 5 || s.votes * 4 < s.matches * 3)
+            return Unsupported("IConsoleManager::Singleton not found"), false;
         if (s.findOffset != static_cast<int32_t>(cvars::kFindConsoleVariable))
             return Unsupported("FindConsoleVariable is not at the expected vtable offset"), false;
         singleton = s.singleton;
@@ -452,7 +454,9 @@ void OnInitDevice(device* dev) {
     bool d3d11 = dev->get_api() == device_api::d3d11;
     Log("device created: %s", d3d11 ? "Direct3D 11" : "not Direct3D 11");
     if (!d3d11) return;
-    if (uint64_t mb = AdapterMemoryMb(reinterpret_cast<ID3D11Device*>(dev->get_native()))) {
+    // The game also creates a device on the integrated GPU at startup; keep the largest.
+    uint64_t mb = AdapterMemoryMb(reinterpret_cast<ID3D11Device*>(dev->get_native()));
+    if (mb > g_vramMb) {
         g_vramMb = mb;
         Log("device: %llu MB dedicated video memory", static_cast<unsigned long long>(mb));
     }

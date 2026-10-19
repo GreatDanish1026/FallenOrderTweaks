@@ -84,23 +84,39 @@ struct ManagerScan {
     int findVotes = 0, findMatches = 0;
 };
 
-// Scans .text for lookups of L"r.ScreenPercentage": mov rcx,[rip+Singleton] within 0x40 bytes
-// before the lea, and the first call [rax+disp] within 0x30 bytes after it.
+// Cvars the game looks up by name; each is only looked up a few times (r.ScreenPercentage 4),
+// so the vote runs over all of them.
+const wchar_t* const kLookupNames[] = {
+    L"r.ScreenPercentage", L"r.MaxAnisotropy",     L"r.Shadow.MaxResolution", L"r.Shadow.MaxCSMResolution",
+    L"r.ViewDistanceScale", L"r.SSR.Quality",      L"r.TemporalAA.Upsampling", L"r.Streaming.PoolSize",
+    L"r.DetailMode",        L"r.MaterialQualityLevel", L"r.PostProcessAAQuality", L"r.VSync",
+    L"r.MotionBlurQuality", L"r.DepthOfFieldQuality",  L"r.BloomQuality",         L"r.Upscale.Quality",
+    L"r.SceneColorFringeQuality", L"r.Tonemapper.Sharpen", L"r.HDR.EnableHDROutput", L"t.MaxFPS",
+};
+
+// Scans .text for lookups of those names: mov rcx,[rip+Singleton] within 0x40 bytes before
+// `lea rdx, [rip+name]`, and the first call [rax+disp] within 0x30 bytes after it.
 inline ManagerScan ScanConsoleManager(const uint8_t* base) {
     ManagerScan out;
     Section text, rdata;
     if (!FindSection(base, ".text", text) || !FindSection(base, ".rdata", rdata)) return out;
-    const uint8_t* name = FindWideString(rdata, L"r.ScreenPercentage");
-    if (!name) return out;
+    const uint8_t* names[sizeof(kLookupNames) / sizeof(kLookupNames[0])];
+    size_t nameCount = 0;
+    for (const wchar_t* n : kLookupNames)
+        if (const uint8_t* s = FindWideString(rdata, n)) names[nameCount++] = s;
+    if (!nameCount) return out;
     std::map<void**, int> singletons;
     std::map<int32_t, int> offsets;
     for (size_t i = 0x40; i + 0x30 <= text.size; ++i) {
         const uint8_t* p = text.begin + i;
-        // lea rdx, [rip+disp32] -> the name
+        // lea rdx, [rip+disp32] -> one of the names
         if (p[0] != 0x48 || p[1] != 0x8d || p[2] != 0x15) continue;
         int32_t disp;
         memcpy(&disp, p + 3, 4);
-        if (p + 7 + disp != name) continue;
+        const uint8_t* target = p + 7 + disp;
+        bool isName = false;
+        for (size_t k = 0; k < nameCount && !isName; ++k) isName = target == names[k];
+        if (!isName) continue;
         for (const uint8_t* q = p - 7; q >= p - 0x40; --q) {
             if (q[0] != 0x48 || q[1] != 0x8b || q[2] != 0x0d) continue;
             memcpy(&disp, q + 3, 4);
