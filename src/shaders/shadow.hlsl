@@ -1,39 +1,61 @@
 // Unreal 4.21's shadow projection pass for Jedi: Fallen Order, rebuilt, with soft (PCSS) and
 // contact shadows for the sun. It replaces FShadowProjectionPS<Quality 4/5, UseFadePlane,
-// no transmission> (USE_FADE_PLANE selects the variant) with the same bindings, so it drops
-// into the game's pipeline unchanged. Without settings from FallenOrderTweaks it runs the
-// game's own filtering. See docs/FINDINGS.md, "Shadows".
+// UseTransmission> (USE_FADE_PLANE and USE_TRANSMISSION select the variant) with the same
+// bindings, so it drops into the game's pipeline unchanged. Without settings from
+// FallenOrderTweaks it runs the game's own filtering. See docs/FINDINGS.md, "Shadows".
 //
 // Bindings (from the game's shader; reflection is stripped, so by register):
 //   v0      SV_Position
 //   t0/s0   scene depth (device Z)
-//   t1/s1   custom data (a = subsurface opacity)
-//   t2/s2   GBuffer B (shading model in a)
-//   t3/s3   shadow depth map (this cascade's region)
+//   without transmission:
+//     t1/s1 custom data (a = subsurface opacity), t2/s2 GBuffer B (shading model in a),
+//     t3/s3 shadow depth map (this cascade's region)
+//   with transmission:
+//     t1/s1 GBuffer A (world normal), t2/s2 subsurface profile ID (a), t3/s3 custom data
+//     (a = opacity), t4/s4 GBuffer B, t5/s5 shadow depth map, t6 subsurface profiles
 //   cb0     [2].z soft transition scale; [3] shadow map size, 1 / size; [28].y fade fraction,
 //           .z sharpen; [30..33] ScreenToShadowMatrix rows; [34].xy subsurface depth bias
-//           and density, .zw fade plane offset and 1 / length (USE_FADE_PLANE)
-//   cb1     View: [24..27] ViewToClip, [57] InvDeviceZToWorldZTransform,
-//           [58] ScreenPositionScaleBias, [123].zw 1 / buffer size,
-//           [135].x StateFrameIndexMod8, [166].x DistanceFieldAOSpecularOcclusionMode (the
-//           settings code, see DecodeSettings)
+//           and density; fade plane offset and 1 / length: [34].zw, or [34].w and [35].x
+//           with transmission
+//   cb1     View: [8..10] TranslatedWorldToView (transmission), [24..27] ViewToClip,
+//           [57] InvDeviceZToWorldZTransform, [58] ScreenPositionScaleBias,
+//           [123].zw 1 / buffer size, [135].x StateFrameIndexMod8,
+//           [166].x DistanceFieldAOSpecularOcclusionMode (the settings code, see
+//           DecodeSettings)
 // Output: sqrt of (shadow, subsurface shadow, shadow, subsurface shadow), or with the fade
 // plane (shadow, subsurface shadow, shadow, cascade fade).
 
-cbuffer Parameters : register(b0) { float4 P[35]; };
+#ifndef USE_FADE_PLANE
+#define USE_FADE_PLANE 0
+#endif
+#ifndef USE_TRANSMISSION
+#define USE_TRANSMISSION 0
+#endif
+
+cbuffer Parameters : register(b0) { float4 P[36]; };
 cbuffer View : register(b1) { float4 V[167]; };
 
 Texture2D SceneDepth : register(t0);
+SamplerState SceneDepthSampler : register(s0);
+#if USE_TRANSMISSION
+Texture2D GBufferA : register(t1);
+Texture2D ProfileId : register(t2);
+Texture2D CustomData : register(t3);
+Texture2D GBufferB : register(t4);
+Texture2D ShadowDepth : register(t5);
+Texture2D SubsurfaceProfiles : register(t6);
+SamplerState GBufferASampler : register(s1);
+SamplerState ProfileIdSampler : register(s2);
+SamplerState CustomDataSampler : register(s3);
+SamplerState GBufferBSampler : register(s4);
+SamplerState ShadowDepthSampler : register(s5);
+#else
 Texture2D CustomData : register(t1);
 Texture2D GBufferB : register(t2);
 Texture2D ShadowDepth : register(t3);
-SamplerState SceneDepthSampler : register(s0);
 SamplerState CustomDataSampler : register(s1);
 SamplerState GBufferBSampler : register(s2);
 SamplerState ShadowDepthSampler : register(s3);
-
-#ifndef USE_FADE_PLANE
-#define USE_FADE_PLANE 0
 #endif
 
 static const float kPi = 3.14159265;
@@ -215,6 +237,45 @@ float ContactShadow(float3 viewPos, float rotation, LightSpace ls, Settings st)
     return 1.0 - occlusion * saturate(2.0 - viewPos.z / 2500.0);
 }
 
+// ---------------------------------------------------------------- transmission
+#if USE_TRANSMISSION
+// Subsurface profile transmission (shading model 5), as the original: push the shadow lookup
+// into the surface along the view-space normal by the profile's normal scale, then sum a
+// clamped thickness over 16 Poisson taps (the game's table, entries 15-30).
+static const float2 kPoisson[16] = {
+    float2(0.403645, -0.793536), float2(0.382645, -0.273012), float2(-0.041249, -0.597179),
+    float2(-0.370926, -0.917990), float2(-0.379535, -0.335349), float2(-0.315447, 0.106907),
+    float2(-0.767181, -0.614345), float2(-0.486522, 0.639513),  float2(0.235987, 0.151055),
+    float2(0.030929, 0.730902),   float2(-0.828460, -0.105583), float2(-0.873238, 0.303417),
+    float2(0.926868, -0.116035),  float2(0.698010, 0.376487),   float2(0.823992, -0.515003),
+    float2(0.508441, 0.753353)};
+
+float ProfileTransmission(float2 uv, float3 screenPosition, bool noProfile)
+{
+    float3 n = normalize(GBufferA.SampleLevel(GBufferASampler, uv, 0).xyz * 2.0 - 1.0);
+    float idRaw = noProfile ? 0.0 : ProfileId.SampleLevel(ProfileIdSampler, uv, 0).a;
+    uint profile = (uint)(idRaw * 255.0 + 0.5);
+    float2 params = SubsurfaceProfiles.Load(int3(1, profile, 0)).xy;
+    float3 viewN = n.x * V[8].xyz + n.y * V[9].xyz + n.z * V[10].xyz;
+    float extinction = params.x * P[34].y * 3.1;
+    float normalScale = params.y * 0.5;
+    float3 p = screenPosition - normalScale * viewN;
+    float4 t = p.x * P[30] + p.y * P[31] + p.z * P[32] + P[33];
+    float2 tuv = t.xy / t.w;
+    float tz = t.z + P[34].x;
+    float sum = 0.0;
+    [loop] for (int i = 0; i < 16; ++i)
+    {
+        float d = ShadowDepth.SampleLevel(ShadowDepthSampler, tuv + kPoisson[i] * P[3].w, 0).r;
+        float delta = tz - d;
+        float v = delta * extinction + normalScale;
+        v = delta * extinction > 0.0 ? v : max(v, 0.0);
+        sum += clamp(abs(v), 0.15, 5.0) + 0.25;
+    }
+    return 1.0 - sum * 0.0125;
+}
+#endif
+
 // ---------------------------------------------------------------- main
 [earlydepthstencil]  // as the original: the cascade's stencil bounds are tested first
 float4 main(float4 SvPosition : SV_Position) : SV_Target
@@ -243,6 +304,10 @@ float4 main(float4 SvPosition : SV_Position) : SV_Target
 
     float shadow, sssShadow;
     GamePcf(shadowUv, receiverZ, s.z + P[34].x, density, subsurface, shadow, sssShadow);
+#if USE_TRANSMISSION
+    if (model == 5)
+        sssShadow = ProfileTransmission(uv, float3(screenPos * sceneW, sceneW), (id & 16) != 0);
+#endif
     // The game's sharpening (the light's Shadow Sharpen).
     shadow = saturate((shadow - 0.5) * P[28].z + 0.5);
 
@@ -267,8 +332,12 @@ float4 main(float4 SvPosition : SV_Position) : SV_Target
     float fade = P[28].y;
     float faded = fade * (shadow * shadow - 1.0) + 1.0;
     float fadedSss = fade * (sssShadow * sssShadow - 1.0) + 1.0;
-#if USE_FADE_PLANE
+#if USE_FADE_PLANE && USE_TRANSMISSION
+    float planeFade = saturate((sceneW - P[34].w) * P[35].x);
+#elif USE_FADE_PLANE
     float planeFade = saturate((sceneW - P[34].z) * P[34].w);
+#endif
+#if USE_FADE_PLANE
     return float4(sqrt(faded), sqrt(fadedSss), sqrt(faded), 1.0 - planeFade);
 #else
     return sqrt(float4(faded, fadedSss, faded, fadedSss));

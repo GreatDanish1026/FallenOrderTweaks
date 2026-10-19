@@ -631,11 +631,11 @@ const ShaderTarget kTargets[] = {
      7236, Feature::Shadows, kShadowPs, sizeof(kShadowPs)},
     {"shadow projection, fade plane", {0x96, 0x1d, 0x82, 0x0c, 0x5c, 0x59, 0x68, 0xd6, 0x40, 0xdc, 0xcb, 0xa9, 0x0b, 0x62, 0xa9, 0xd4},
      7336, Feature::Shadows, kShadowFadePs, sizeof(kShadowFadePs)},
-    // With subsurface transmission: not rebuilt yet, so lights that use it keep the game's.
+    // With subsurface transmission (lights that shine through skin and foliage).
     {"shadow projection, transmission", {0xe0, 0x93, 0x3f, 0x0d, 0xb7, 0xd8, 0x68, 0x75, 0x80, 0x41, 0x52, 0xbd, 0x4c, 0x19, 0x85, 0x38},
-     9696, Feature::None, nullptr, 0},
+     9696, Feature::Shadows, kShadowTransPs, sizeof(kShadowTransPs)},
     {"shadow projection, fade plane and transmission", {0x17, 0xf3, 0x16, 0xac, 0x15, 0x1b, 0x1e, 0x9f, 0xe3, 0x4b, 0x24, 0xdb, 0xac, 0x91, 0xa4, 0x63},
-     9796, Feature::None, nullptr, 0},
+     9796, Feature::Shadows, kShadowFadeTransPs, sizeof(kShadowFadeTransPs)},
 };
 
 struct FeatureStats {

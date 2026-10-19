@@ -228,3 +228,16 @@ In game (0.6.0): the base variant is replaced and looks good with soft and conta
 settings code reaches the shader live. The game also creates the transmission variant (lights
 with subsurface transmission), which isn't rebuilt yet, so what it draws keeps the game's
 shadows. The fade plane variant hasn't been seen created so far.
+
+### Transmission variants
+
+With transmission the registers shift: t1/s1 GBuffer A (world normal), t2/s2 the subsurface
+profile ID (a), t3/s3 custom data (a = opacity), t4/s4 GBuffer B, t5/s5 the shadow depth
+map, t6 the subsurface profiles texture; the fade plane moves to cb0[34].w and cb0[35].x.
+Shading model 5 (subsurface profile) replaces the gathered falloff with the profile's
+transmission: the profile's extinction and normal scale from `t6.Load(1, profile)` (x * 3.1 *
+density, y * 0.5), the lookup point (screen position * depth, depth) pushed back along the
+view-space normal (cb1[8..10]) by the normal scale and re-projected, then 16 Poisson taps
+(the shader's 64-entry table, entries 15-30, scaled by 1 / shadow map height) summing
+`clamp(|v|, 0.15, 5) + 0.25`, where `v = delta * extinction + normalScale` (clamped at 0 unless
+delta * extinction > 0), giving `1 - sum * 0.0125`. Rebuilt in 0.6.1 (`USE_TRANSMISSION`).

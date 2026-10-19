@@ -1,5 +1,6 @@
 # Compiles src\shaders\*.hlsl into the headers the add-on embeds:
-#   gtao.hlsl -> gtao_blob.h (kGtaoPs), shadow.hlsl -> shadow_blobs.h (kShadowPs, kShadowFadePs).
+#   gtao.hlsl -> gtao_blob.h (kGtaoPs), shadow.hlsl -> shadow_blobs.h (kShadowPs, kShadowFadePs,
+#   kShadowTransPs, kShadowFadeTransPs).
 # Needs the Windows SDK's fxc.exe (Direct3D 11, ps_5_0). The generated headers are
 # committed, so build.ps1 works without the SDK.
 $ErrorActionPreference = 'Stop'
@@ -39,4 +40,8 @@ function Build-Header($source, $header, $variants) {
 }
 
 Build-Header 'gtao.hlsl' 'gtao_blob.h' @(, @('GtaoPs', @()))
-Build-Header 'shadow.hlsl' 'shadow_blobs.h' @(@('ShadowPs', @('USE_FADE_PLANE=0')), @('ShadowFadePs', @('USE_FADE_PLANE=1')))
+Build-Header 'shadow.hlsl' 'shadow_blobs.h' @(
+    @('ShadowPs', @('USE_FADE_PLANE=0', 'USE_TRANSMISSION=0')),
+    @('ShadowFadePs', @('USE_FADE_PLANE=1', 'USE_TRANSMISSION=0')),
+    @('ShadowTransPs', @('USE_FADE_PLANE=0', 'USE_TRANSMISSION=1')),
+    @('ShadowFadeTransPs', @('USE_FADE_PLANE=1', 'USE_TRANSMISSION=1')))
