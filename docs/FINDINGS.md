@@ -158,3 +158,10 @@ GTAO (`src/shaders/gtao.hlsl`) replaces `PS000`-`PS004` with the same bindings a
 formula, tracing the full-resolution depth instead of the HZB. The add-on forces
 `r.AmbientOcclusionLevels 1` while it's on, and `r.AmbientOcclusionRadiusScale` sets its
 radius.
+
+GTAO strength rides in `r.AmbientOcclusionMipLevelFactor` (default 0.5): the replaced pass
+receives it as cb0[34].z (the HZB mip scale, which GTAO doesn't use), and the shader reads
+strength = cb0[34].z / 0.5. The add-on drives it whenever GTAO is on.
+
+First in-game comparison (overcast Bogano, 4K DLAA): GTAO is about as dark as the game's AO on
+average, with tighter contact shading in recesses and creases, no halos and no visible noise.

@@ -546,8 +546,12 @@ const AoTarget kAoTargets[] = {
 
 struct GtaoSettings {
     bool on = true;
-    int radiusPercent = 100;  // r.AmbientOcclusionRadiusScale x 100
+    int radiusPercent = 100;    // r.AmbientOcclusionRadiusScale x 100
+    int strengthPercent = 100;  // carried to the shader in r.AmbientOcclusionMipLevelFactor
 };
+// The shader reads strength as r.AmbientOcclusionMipLevelFactor / 0.5 (the cvar's default):
+// it is the HZB mip scale the replaced pass receives (cb0[34].z), which GTAO doesn't need.
+constexpr float kMipFactorPerStrength = 0.5f;
 GtaoSettings g_gtao;
 std::atomic<int> g_gtaoReplaced{0};  // AO pass shaders swapped for GTAO
 std::atomic<int> g_gtaoMissed{0};    // created while GTAO was off: original until restart
@@ -555,14 +559,18 @@ std::atomic<int> g_gtaoMissed{0};    // created while GTAO was off: original unt
 void SaveGtao() {
     reshade::set_config_value(nullptr, kConfigSection, "GtaoOn", g_gtao.on);
     reshade::set_config_value(nullptr, kConfigSection, "GtaoRadiusPercent", g_gtao.radiusPercent);
+    reshade::set_config_value(nullptr, kConfigSection, "GtaoStrengthPercent", g_gtao.strengthPercent);
 }
 
 // At load, before the game creates its shaders.
 void InitGtao() {
     reshade::get_config_value(nullptr, kConfigSection, "GtaoOn", g_gtao.on);
     reshade::get_config_value(nullptr, kConfigSection, "GtaoRadiusPercent", g_gtao.radiusPercent);
+    reshade::get_config_value(nullptr, kConfigSection, "GtaoStrengthPercent", g_gtao.strengthPercent);
     g_gtao.radiusPercent = std::clamp(g_gtao.radiusPercent, 50, 200);
-    Log("gtao: %s, radius %d %%", g_gtao.on ? "on" : "off", g_gtao.radiusPercent);
+    g_gtao.strengthPercent = std::clamp(g_gtao.strengthPercent, 25, 300);
+    Log("gtao: %s, radius %d %%, strength %d %%", g_gtao.on ? "on" : "off", g_gtao.radiusPercent,
+        g_gtao.strengthPercent);
 }
 
 const AoTarget* FindAoTarget(const void* code, size_t size) {
@@ -600,6 +608,8 @@ void ApplyGtao() {
     // After ApplyLighting, so this wins over its ambient occlusion levels.
     if (g_gtao.on) Drive(L"r.AmbientOcclusionLevels", true, 1.0f);
     Drive(L"r.AmbientOcclusionRadiusScale", g_gtao.on && g_gtao.radiusPercent != 100, g_gtao.radiusPercent / 100.0f);
+    // Always while on, so the shader never reads the game's own value as a strength.
+    Drive(L"r.AmbientOcclusionMipLevelFactor", g_gtao.on, kMipFactorPerStrength * g_gtao.strengthPercent / 100.0f);
 }
 
 // ---------------------------------------------------------------- events
@@ -814,7 +824,12 @@ void DrawLighting() {
                            "thin objects. The game's own AO strength and distance fade still apply.";
     Help(gtaoHelp);
     if (g_gtao.on) {
-        if (BeginSettings("##gtao", "GTAO radius")) {
+        if (BeginSettings("##gtao", "GTAO strength")) {
+            const char* strengthHelp = "How dark GTAO's shading is, on top of the game's own AO strength. 100 % "
+                                       "is about as dark as the game's AO.";
+            SettingRow("GTAO strength", strengthHelp);
+            gtaoChanged |= ImGui::SliderInt("##strength", &g_gtao.strengthPercent, 25, 300, "%d %%");
+            Help(strengthHelp);
             const char* radiusHelp = "How far GTAO looks for occluders, relative to the game's AO radius. Larger "
                                      "reaches further from corners; smaller keeps it to contact shading.";
             SettingRow("GTAO radius", radiusHelp);

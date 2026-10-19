@@ -11,7 +11,8 @@
 //   cb0     the pass's parameters: [30].x power, .y bias, .w intensity; [31].w aspect ratio,
 //           .xy random UV scale; [31].z radius; [32].z radius in world space (1) or
 //           screen space (0); [33].w 1 / tan(half FOV), .xy random UV offset;
-//           [34].xy distance fade
+//           [34].xy distance fade, .z r.AmbientOcclusionMipLevelFactor (the HZB mip scale,
+//           which GTAO doesn't need: FallenOrderTweaks sets it to 0.5 x the GTAO strength)
 //   cb1     View: [8..10] TranslatedWorldToView rows, [57] InvDeviceZToWorldZTransform
 // Output: the AO factor in every channel (1 = unoccluded), as the original writes it.
 
@@ -35,6 +36,7 @@ static const float kMaxRadiusPixels = 256.0;
 // (railings, branches) don't cast wide dark halos.
 static const float kHorizonDecay = 0.15;
 static const uint kShadingModelHair = 7;  // the original gives hair no normal
+static const float kMipFactorPerStrength = 0.5;  // the cvar's default: strength 1
 
 float ConvertFromDeviceZ(float z) { return z * V[57].x + V[57].y + 1.0 / (z * V[57].z - V[57].w); }
 
@@ -125,7 +127,8 @@ float4 main(noperspective float4 UVAndScreenPos : TEXCOORD0, float4 SvPosition :
             sum += projLen * saturate(arc / max(open, 1e-4));
             weight += projLen;
         }
-        visibility = sum / max(weight, 1e-4);
+        float strength = clamp(P[34].z / kMipFactorPerStrength, 0.0, 4.0);
+        visibility = saturate(1.0 - (1.0 - sum / max(weight, 1e-4)) * strength);
     }
 
     // The original's last steps: distance fade, then the post process volume's power and
