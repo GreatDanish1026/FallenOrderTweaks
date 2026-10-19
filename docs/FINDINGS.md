@@ -223,3 +223,8 @@ projection is orthographic: the matrix's w column is 0, 0, 0, 1) adds PCSS soft 
 screen-space contact shadow march, ported from AWTweaks. The light space comes from the
 matrix: with ViewToClip's scale, its rows are the view-space gradients of shadow u, v and z,
 so their lengths give shadow UV and depth per cm and `cross(du, dv)` the light direction.
+
+In game (0.6.0): the base variant is replaced and looks good with soft and contact shadows; the
+settings code reaches the shader live. The game also creates the transmission variant (lights
+with subsurface transmission), which isn't rebuilt yet, so what it draws keeps the game's
+shadows. The fade plane variant hasn't been seen created so far.
