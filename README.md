@@ -13,6 +13,8 @@ the ReShade overlay: no Engine.ini, no launcher.
   foliage density, and more detailed characters and terrain.
 - **GTAO**: ground-truth ambient occlusion in place of the game's SSAO, with strength and
   radius settings: deeper shading in corners and creases, none on open surfaces, no dark halos.
+- **Soft and contact sun shadows**: sun shadows that soften with distance from what casts
+  them (sun size setting), and small contact shadows where objects meet surfaces.
 - **Lighting**: more SSAO levels, finer volumetric fog, full-resolution character shadows,
   higher-quality skin, smoke and glass lighting, bloom, light shafts, cutscene depth of field
   and reflections on rough surfaces, each shown next to the game's own value.

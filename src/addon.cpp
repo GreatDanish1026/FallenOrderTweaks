@@ -13,7 +13,8 @@
 //              further shadows, further view distance, and top-quality screen space
 //              reflections; rows for shadow cascades and their blending, grass distance,
 //              foliage density, and character and terrain detail
-//   Lighting   GTAO in place of the game's SSAO (src/shaders/gtao.hlsl), more SSAO levels,
+//   Lighting   GTAO in place of the game's SSAO (src/shaders/gtao.hlsl), soft (PCSS) and
+//              contact shadows for the sun (src/shaders/shadow.hlsl), more SSAO levels,
 //              finer volumetric fog, full-resolution capsule shadows, high-quality skin
 //              scattering, smoke and glass lighting, bloom, light shafts, cutscene depth of
 //              field and reflections on rough surfaces, each shown next to the game's own value
@@ -43,6 +44,7 @@
 
 #include "cvars.hpp"
 #include "shaders/gtao_blob.h"
+#include "shaders/shadow_blobs.h"
 #include "version.h"
 
 extern "C" __declspec(dllexport) const char* NAME = FOT_PRODUCT;
@@ -593,24 +595,63 @@ void ApplyRows(RowList& list) {
     }
 }
 
-// ---------------------------------------------------------------- GTAO
+// ---------------------------------------------------------------- shader replacement
 
-// The game's single-level, full-resolution AO pass (FPostProcessAmbientOcclusionPS<0, 0, Q>,
-// quality 0-4; 3 and 4 compile to the same code), from GlobalShaderCache-PCD3D_SM5.bin in
-// pakchunk0-WindowsNoEditor_1_P.pak (tools/gsc.py). It only runs with
-// r.AmbientOcclusionLevels 1, which GTAO forces; with GTAO off the levels go back to the
-// game's and its own multi-level passes, never replaced, run as before.
-struct AoTarget {
+// Game shaders swapped for FallenOrderTweaks' own when the game creates them, matched by DXBC
+// container digest and size. All from GlobalShaderCache-PCD3D_SM5.bin in
+// pakchunk0-WindowsNoEditor_1_P.pak (tools/gsc.py); docs/FINDINGS.md has their bindings.
+enum class Feature { Gtao, Shadows, None };
+
+struct ShaderTarget {
     const char* name;
     uint8_t digest[16];  // DXBC container hash (bytes 4..20)
     size_t size;
+    Feature feature;
+    const uint8_t* replacement;  // null: only logged
+    size_t replacementSize;
 };
-const AoTarget kAoTargets[] = {
-    {"quality 0", {0x81, 0x18, 0xe6, 0xa8, 0xdf, 0xbe, 0x54, 0xcf, 0x93, 0x6f, 0x2b, 0x5a, 0xcd, 0x8b, 0x3d, 0xad}, 7964},
-    {"quality 1", {0x9d, 0x53, 0x9f, 0xd1, 0x50, 0x0c, 0x71, 0xcb, 0x2c, 0x2e, 0x4b, 0x1c, 0x0c, 0x2f, 0x29, 0x75}, 8880},
-    {"quality 2", {0x4a, 0x36, 0x41, 0x52, 0xd0, 0x35, 0x27, 0x4f, 0x53, 0xd7, 0xc3, 0x3f, 0x01, 0x43, 0x6a, 0x34}, 13824},
-    {"quality 3-4", {0x19, 0x6c, 0x63, 0xcb, 0x44, 0x8b, 0x24, 0x93, 0x0f, 0x2b, 0x5a, 0xcf, 0xb0, 0xf5, 0x9a, 0x3b}, 16952},
+
+const ShaderTarget kTargets[] = {
+    // The single-level, full-resolution AO pass (FPostProcessAmbientOcclusionPS<0, 0, Q>,
+    // quality 0-4; 3 and 4 compile to the same code). It only runs with
+    // r.AmbientOcclusionLevels 1, which GTAO forces; with GTAO off the levels go back to the
+    // game's and its own multi-level passes, never replaced, run as before.
+    {"AO pass, quality 0", {0x81, 0x18, 0xe6, 0xa8, 0xdf, 0xbe, 0x54, 0xcf, 0x93, 0x6f, 0x2b, 0x5a, 0xcd, 0x8b, 0x3d, 0xad},
+     7964, Feature::Gtao, kGtaoPs, sizeof(kGtaoPs)},
+    {"AO pass, quality 1", {0x9d, 0x53, 0x9f, 0xd1, 0x50, 0x0c, 0x71, 0xcb, 0x2c, 0x2e, 0x4b, 0x1c, 0x0c, 0x2f, 0x29, 0x75},
+     8880, Feature::Gtao, kGtaoPs, sizeof(kGtaoPs)},
+    {"AO pass, quality 2", {0x4a, 0x36, 0x41, 0x52, 0xd0, 0x35, 0x27, 0x4f, 0x53, 0xd7, 0xc3, 0x3f, 0x01, 0x43, 0x6a, 0x34},
+     13824, Feature::Gtao, kGtaoPs, sizeof(kGtaoPs)},
+    {"AO pass, quality 3-4", {0x19, 0x6c, 0x63, 0xcb, 0x44, 0x8b, 0x24, 0x93, 0x0f, 0x2b, 0x5a, 0xcf, 0xb0, 0xf5, 0x9a, 0x3b},
+     16952, Feature::Gtao, kGtaoPs, sizeof(kGtaoPs)},
+    // The shadow projection pass at shadow quality 4-5 (Epic), FShadowProjectionPS<Q, fade
+    // plane, transmission>; 4 and 5 compile to the same code. Rebuilt with soft and contact
+    // shadows for the sun; without settings it runs the game's own filtering.
+    {"shadow projection", {0x24, 0x43, 0x25, 0x87, 0xeb, 0x61, 0xe7, 0x4a, 0x6c, 0xe3, 0xe1, 0xb8, 0xc5, 0xa8, 0xb2, 0x38},
+     7236, Feature::Shadows, kShadowPs, sizeof(kShadowPs)},
+    {"shadow projection, fade plane", {0x96, 0x1d, 0x82, 0x0c, 0x5c, 0x59, 0x68, 0xd6, 0x40, 0xdc, 0xcb, 0xa9, 0x0b, 0x62, 0xa9, 0xd4},
+     7336, Feature::Shadows, kShadowFadePs, sizeof(kShadowFadePs)},
+    // With subsurface transmission: not rebuilt yet, so lights that use it keep the game's.
+    {"shadow projection, transmission", {0xe0, 0x93, 0x3f, 0x0d, 0xb7, 0xd8, 0x68, 0x75, 0x80, 0x41, 0x52, 0xbd, 0x4c, 0x19, 0x85, 0x38},
+     9696, Feature::None, nullptr, 0},
+    {"shadow projection, fade plane and transmission", {0x17, 0xf3, 0x16, 0xac, 0x15, 0x1b, 0x1e, 0x9f, 0xe3, 0x4b, 0x24, 0xdb, 0xac, 0x91, 0xa4, 0x63},
+     9796, Feature::None, nullptr, 0},
 };
+
+struct FeatureStats {
+    std::atomic<int> replaced{0};  // shaders swapped
+    std::atomic<int> missed{0};    // created while the feature was off: the game's until restart
+};
+FeatureStats g_gtaoStats, g_shadowStats;
+
+const ShaderTarget* FindTarget(const void* code, size_t size) {
+    if (!code || size < 20 || memcmp(code, "DXBC", 4) != 0) return nullptr;
+    for (const ShaderTarget& t : kTargets)
+        if (size == t.size && memcmp(static_cast<const uint8_t*>(code) + 4, t.digest, 16) == 0) return &t;
+    return nullptr;
+}
+
+// ---------------------------------------------------------------- GTAO
 
 struct GtaoSettings {
     bool on = true;
@@ -621,8 +662,6 @@ struct GtaoSettings {
 // it is the HZB mip scale the replaced pass receives (cb0[34].z), which GTAO doesn't need.
 constexpr float kMipFactorPerStrength = 0.5f;
 GtaoSettings g_gtao;
-std::atomic<int> g_gtaoReplaced{0};  // AO pass shaders swapped for GTAO
-std::atomic<int> g_gtaoMissed{0};    // created while GTAO was off: original until restart
 
 void SaveGtao() {
     reshade::set_config_value(nullptr, kConfigSection, "GtaoOn", g_gtao.on);
@@ -641,43 +680,91 @@ void InitGtao() {
         g_gtao.strengthPercent);
 }
 
-const AoTarget* FindAoTarget(const void* code, size_t size) {
-    if (!code || size < 20 || memcmp(code, "DXBC", 4) != 0) return nullptr;
-    for (const AoTarget& t : kAoTargets)
-        if (size == t.size && memcmp(static_cast<const uint8_t*>(code) + 4, t.digest, 16) == 0) return &t;
-    return nullptr;
-}
-
-// ReShade hands us its copy of the shader description, so changing it changes what the
-// driver compiles. kGtaoPs is static, so it outlives the call.
-bool OnCreatePipeline(device* dev, pipeline_layout, uint32_t count, const pipeline_subobject* subobjects) {
-    if (dev->get_api() != device_api::d3d11) return false;
-    bool changed = false;
-    for (uint32_t i = 0; i < count; ++i) {
-        if (subobjects[i].type != pipeline_subobject_type::pixel_shader || !subobjects[i].data) continue;
-        auto* desc = static_cast<shader_desc*>(subobjects[i].data);
-        const AoTarget* t = FindAoTarget(desc->code, desc->code_size);
-        if (!t) continue;
-        if (!g_gtao.on) {
-            ++g_gtaoMissed;
-            Log("gtao: AO pass (%s) created while GTAO is off: the game's own until restart", t->name);
-            continue;
-        }
-        desc->code = kGtaoPs;
-        desc->code_size = sizeof(kGtaoPs);
-        changed = true;
-        ++g_gtaoReplaced;
-        Log("gtao: replacing the AO pass (%s)", t->name);
-    }
-    return changed;
-}
-
 void ApplyGtao() {
     // After ApplyRows(g_lighting), so this wins over its ambient occlusion levels.
     if (g_gtao.on) Drive(L"r.AmbientOcclusionLevels", true, 1.0f);
     Drive(L"r.AmbientOcclusionRadiusScale", g_gtao.on && g_gtao.radiusPercent != 100, g_gtao.radiusPercent / 100.0f);
     // Always while on, so the shader never reads the game's own value as a strength.
     Drive(L"r.AmbientOcclusionMipLevelFactor", g_gtao.on, kMipFactorPerStrength * g_gtao.strengthPercent / 100.0f);
+}
+
+// ---------------------------------------------------------------- sun shadows
+
+// Soft (PCSS) and contact shadows for the sun, in the rebuilt shadow projection pass
+// (src/shaders/shadow.hlsl). Its settings ride in r.AOSpecularOcclusionMode, which reaches
+// every shader as View.DistanceFieldAOSpecularOcclusionMode (cb1[166].x) and otherwise only
+// matters for distance field AO, which the game can't use (it ships no distance fields):
+// code = 1000 + sun size in 0.1 degree steps * 100 + contact length in 2 cm steps.
+struct SunSize {
+    const char* label;
+    int tenths;  // apparent diameter, 0.1 degree steps
+};
+const SunSize kSunSizes[] = {{"Off", 0}, {"Real sun (0.5\xc2\xb0)", 5}, {"Soft (1\xc2\xb0)", 10}, {"Very soft (2\xc2\xb0)", 20}};
+struct ContactLength {
+    const char* label;
+    int steps;  // 2 cm steps
+};
+const ContactLength kContactLengths[] = {{"Off", 0}, {"Short (20 cm)", 10}, {"Medium (50 cm)", 25}, {"Long (1 m)", 50}};
+
+struct ShadowSettings {
+    int sun = 1;      // kSunSizes
+    int contact = 1;  // kContactLengths
+};
+ShadowSettings g_shadows;
+
+bool ShadowsOn() { return g_shadows.sun > 0 || g_shadows.contact > 0; }
+
+void SaveShadows() {
+    reshade::set_config_value(nullptr, kConfigSection, "ShadowSunSize", g_shadows.sun);
+    reshade::set_config_value(nullptr, kConfigSection, "ShadowContact", g_shadows.contact);
+}
+
+// At load, before the game creates its shaders.
+void InitShadows() {
+    reshade::get_config_value(nullptr, kConfigSection, "ShadowSunSize", g_shadows.sun);
+    reshade::get_config_value(nullptr, kConfigSection, "ShadowContact", g_shadows.contact);
+    g_shadows.sun = std::clamp(g_shadows.sun, 0, static_cast<int>(std::size(kSunSizes)) - 1);
+    g_shadows.contact = std::clamp(g_shadows.contact, 0, static_cast<int>(std::size(kContactLengths)) - 1);
+    Log("shadows: sun %s, contact %s", kSunSizes[g_shadows.sun].label, kContactLengths[g_shadows.contact].label);
+}
+
+void ApplyShadows() {
+    int code = 1000 + kSunSizes[g_shadows.sun].tenths * 100 + kContactLengths[g_shadows.contact].steps;
+    Drive(L"r.AOSpecularOcclusionMode", ShadowsOn(), static_cast<float>(code));
+}
+
+// ---------------------------------------------------------------- creating shaders
+
+// ReShade hands us its copy of the shader description, so changing it changes what the
+// driver compiles. The replacements are static, so they outlive the call. A feature's
+// shaders are swapped only if it is on when the game creates them (at load, or the first
+// time the pass runs); its settings then change live.
+bool OnCreatePipeline(device* dev, pipeline_layout, uint32_t count, const pipeline_subobject* subobjects) {
+    if (dev->get_api() != device_api::d3d11) return false;
+    bool changed = false;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (subobjects[i].type != pipeline_subobject_type::pixel_shader || !subobjects[i].data) continue;
+        auto* desc = static_cast<shader_desc*>(subobjects[i].data);
+        const ShaderTarget* t = FindTarget(desc->code, desc->code_size);
+        if (!t) continue;
+        if (t->feature == Feature::None) {
+            Log("shaders: %s created (not rebuilt: the game's own)", t->name);
+            continue;
+        }
+        bool on = t->feature == Feature::Gtao ? g_gtao.on : ShadowsOn();
+        FeatureStats& stats = t->feature == Feature::Gtao ? g_gtaoStats : g_shadowStats;
+        if (!on) {
+            ++stats.missed;
+            Log("shaders: %s created while its feature is off: the game's own until restart", t->name);
+            continue;
+        }
+        desc->code = t->replacement;
+        desc->code_size = t->replacementSize;
+        changed = true;
+        ++stats.replaced;
+        Log("shaders: replacing the %s", t->name);
+    }
+    return changed;
 }
 
 // ---------------------------------------------------------------- events
@@ -728,6 +815,7 @@ void OnPresent(command_queue*, swapchain* sc, const rect*, const rect*, uint32_t
     ApplyRows(g_lighting);
     ApplyRows(g_detailRows);
     ApplyGtao();
+    ApplyShadows();
     ApplyOverrides();
     if (g_frames % 60 == 0) CheckOverrides();
 }
@@ -957,9 +1045,9 @@ void DrawLighting() {
             Help(radiusHelp);
             ImGui::EndTable();
         }
-        if (g_gtaoReplaced > 0)
+        if (g_gtaoStats.replaced > 0)
             ImGui::TextDisabled("Active.");
-        else if (g_gtaoMissed > 0)
+        else if (g_gtaoStats.missed > 0)
             ImGui::TextColored(kWarn, "Restart the game to switch GTAO on.");
         else
             ImGui::TextDisabled("Waiting for the game to create its AO pass.");
@@ -967,11 +1055,43 @@ void DrawLighting() {
     if (gtaoChanged) SaveGtao();
     ImGui::Spacing();
 
+    bool shadowsChanged = false;
+    if (BeginSettings("##shadows", "Soft sun shadows")) {
+        const char* sunHelp = "Sun shadows that soften the farther they fall from what casts them, as real sun "
+                              "shadows do: sharp where a pole meets the ground, soft at the tip of its shadow. "
+                              "Larger sun sizes give softer shadows.";
+        SettingRow("Soft sun shadows", sunHelp);
+        const char* suns[std::size(kSunSizes)];
+        for (size_t i = 0; i < std::size(kSunSizes); ++i) suns[i] = kSunSizes[i].label;
+        shadowsChanged |= ImGui::Combo("##sun", &g_shadows.sun, suns, static_cast<int>(std::size(kSunSizes)));
+        Help(sunHelp);
+        const char* contactHelp = "Small sun shadows where objects meet surfaces (feet, rocks, crates, grass), "
+                                  "which the shadow map is too coarse for. Longer reaches further from the contact.";
+        SettingRow("Contact shadows", contactHelp);
+        const char* contacts[std::size(kContactLengths)];
+        for (size_t i = 0; i < std::size(kContactLengths); ++i) contacts[i] = kContactLengths[i].label;
+        shadowsChanged |= ImGui::Combo("##contact", &g_shadows.contact, contacts, static_cast<int>(std::size(kContactLengths)));
+        Help(contactHelp);
+        ImGui::EndTable();
+    }
+    if (ShadowsOn()) {
+        if (g_shadowStats.replaced > 0)
+            ImGui::TextDisabled("Active.");
+        else if (g_shadowStats.missed > 0)
+            ImGui::TextColored(kWarn, "Restart the game to switch soft and contact shadows on.");
+        else
+            ImGui::TextDisabled("Waiting for the game to create its shadow pass.");
+    }
+    if (shadowsChanged) SaveShadows();
+    ImGui::Spacing();
+
     bool changed = DrawRows(g_lighting, "##lighting");
     if (ResetButton()) {
         for (CvarRow& e : g_lighting.rows) e.choice = e.byDefault;
         g_gtao = GtaoSettings{};
         SaveGtao();
+        g_shadows = ShadowSettings{};
+        SaveShadows();
         changed = true;
     }
     if (changed) SaveRows(g_lighting);
@@ -1049,6 +1169,7 @@ void Install() {
     LogGameInfo();
     DefineRows();
     InitGtao();
+    InitShadows();
     reshade::register_event<reshade::addon_event::create_pipeline>(&OnCreatePipeline);
     reshade::register_event<reshade::addon_event::init_device>(&OnInitDevice);
     reshade::register_event<reshade::addon_event::present>(&OnPresent);

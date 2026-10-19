@@ -172,3 +172,54 @@ average, with tighter contact shading in recesses and creases, no halos and no v
 
 - Retested with 0.4.2's renderer mirroring: PCSS and contact shadows still make no visible
   change, so they stay out.
+
+## View uniform buffer
+
+The View buffer's member table (name, offset, type) is built at startup by code that sets
+each member's offset (`mov dword [rbp-0x20], imm32`) just before loading its name (a UTF-16
+string); `tools/viewoff.py` reads it. It agrees with every View register the game's shaders
+use (TranslatedWorldToView 0x80, InvDeviceZToWorldZTransform 0x390, ScreenPositionScaleBias
+0x3a0, BufferSizeAndInvSize 0x7b0), and gives:
+
+| Member | Offset | Register |
+|---|---|---|
+| ViewToClip | 0x180 | cb1[24..27] (row 2: TAA jitter) |
+| StateFrameIndexMod8 | 0x870 | cb1[135].x (uint) |
+| DistanceFieldAOSpecularOcclusionMode | 0xa60 | cb1[166].x (uint, from `r.AOSpecularOcclusionMode`) |
+
+`r.GeneralPurposeTweak` is compiled out of the shipping build (its View member exists but
+nothing fills it). `r.AOSpecularOcclusionMode` only matters for distance field AO, which the
+game can't use (no distance fields), so its View member carries settings to any shader.
+
+## Shadows
+
+`FShadowProjectionPS<Quality, UseFadePlane, UseTransmission>` projects each shadow (sun
+cascades, per-object and spot shadows) into the screen's light attenuation. Quality 4 and 5
+compile to the same code; Epic uses 5. Bindings of the quality-5 variants:
+
+| Register | Meaning |
+|---|---|
+| v0 | SV_Position (`[earlydepthstencil]`) |
+| t0 / t1 / t2 | scene depth / custom data (a = subsurface opacity) / GBuffer B (shading model) |
+| t3 / s3 | the shadow depth map, read with nine `gather4` over 6x6 texels |
+| cb0[2].z | soft transition: `saturate((occluder - receiver) * k + 1)` |
+| cb0[3] | shadow map size, 1 / size |
+| cb0[28] | y fade fraction, z the light's Shadow Sharpen |
+| cb0[30..33] | ScreenToShadowMatrix rows, on (screen position * depth, depth, 1) |
+| cb0[34] | xy subsurface depth bias and density; zw fade plane offset and 1 / length |
+| cb1 | View: [57], [58], [123] |
+
+The filter is a 5x5 PCF with bilinear-weighted outer rows and columns (sum / 25). Shading
+models 2, 3, 5, 6, 7 and 9 also get a subsurface shadow from the same texels:
+`exp(-max(receiver + bias - occluder, 0) * density)` (1 past depth 0.99), density 1 for 5, 7
+and 9, else `-0.034657 * ln(1 - opacity)` (0 with GBuffer B bit 16). Then
+`shadow = saturate((shadow - 0.5) * sharpen + 0.5)`, both faded by `lerp(1, x^2, fade)`, and
+the output is `sqrt(shadow, sss, shadow, sss)`; with the fade plane the alpha is
+`1 - saturate((depth - offset) * invLength)` instead. The transmission variants add GBuffer
+normals and View cb1[8..10].
+
+`src/shaders/shadow.hlsl` rebuilds the two non-transmission variants, and for the sun only (its
+projection is orthographic: the matrix's w column is 0, 0, 0, 1) adds PCSS soft shadows and a
+screen-space contact shadow march, ported from AWTweaks. The light space comes from the
+matrix: with ViewToClip's scale, its rows are the view-space gradients of shadow u, v and z,
+so their lengths give shadow UV and depth per cm and `cross(du, dv)` the light direction.
