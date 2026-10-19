@@ -469,9 +469,9 @@ bool g_lightingInitialised = false;
 
 void DefineLighting() {
     g_lighting = {
-        // Dropped: distance field AO and shadows (no distance fields shipped). PCSS and
-        // contact shadows are back for a second test, off by default: the first ran before
-        // the renderer mirroring (docs/FINDINGS.md, "Experimental results").
+        // Tried and dropped (docs/FINDINGS.md, "Experimental results"): distance field AO and
+        // shadows (no distance fields shipped), PCSS soft shadows and contact shadows (no
+        // visible change in game, also with the renderer mirroring).
         {"ExpAmbientOcclusion", "Ambient occlusion",
          "The game's screen space ambient occlusion: more levels give deeper, smoother shading in corners and "
          "creases.\nHigh: 3 levels. Max: 4.",
@@ -491,14 +491,6 @@ void DefineLighting() {
         {"ExpSkin", "Skin scattering",
          "Light scattering under the skin of faces and hands.\nHigh: the high quality, full resolution version.",
          L"r.SSS.Quality", {"Game", "High"}, {{{L"r.SSS.Quality", 1}, {L"r.SSS.HalfRes", 0}}}},
-        {"ExpSoftShadows", "Soft shadows (test)",
-         "UE 4.21's experimental PCSS: shadows soften the farther they fall from what casts them. Being tested: "
-         "if it changes nothing, it will be removed.",
-         L"r.Shadow.FilterMethod", {"Game", "On"}, {{{L"r.Shadow.FilterMethod", 1}}}, 0},
-        {"ExpContactShadows", "Contact shadows (test)",
-         "Short screen space shadows where objects touch surfaces, for lights that have a contact shadow length. "
-         "Being tested: if it changes nothing, it will be removed.",
-         L"r.ContactShadows", {"Game", "On"}, {{{L"r.ContactShadows", 1}}}, 0},
     };
 }
 
@@ -859,7 +851,7 @@ void DrawLighting() {
     bool changed = false;
     if (ImGui::BeginTable("##lighting", 3, ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed,
-                                ImGui::CalcTextSize("Contact shadows (test)").x + ImGui::GetFontSize());
+                                ImGui::CalcTextSize("Character soft shadows").x + ImGui::GetFontSize());
         ImGui::TableSetupColumn("control", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 11);
         ImGui::TableSetupColumn("game", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 6);
         for (LightingRow& e : g_lighting) {

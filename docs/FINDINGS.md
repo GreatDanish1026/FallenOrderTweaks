@@ -170,5 +170,5 @@ strength = cb0[34].z / 0.5. The add-on drives it whenever GTAO is on.
 First in-game comparison (overcast Bogano, 4K DLAA): GTAO is about as dark as the game's AO on
 average, with tighter contact shading in recesses and creases, no halos and no visible noise.
 
-- Caveat: the PCSS and contact shadow tests ran before 0.4.2's renderer mirroring, so those
-  values may never have reached the renderer; they are worth trying again.
+- Retested with 0.4.2's renderer mirroring: PCSS and contact shadows still make no visible
+  change, so they stay out.
