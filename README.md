@@ -3,21 +3,24 @@
 A ReShade add-on for **Star Wars Jedi: Fallen Order** (PC) that sets the game's graphics from
 the ReShade overlay: no Engine.ini, no launcher.
 
-- **DLSS mode** for [Luma](https://github.com/Filoppi/Luma-Framework): DLAA, Quality,
-  Balanced, Performance or Ultra Performance, changed live. Luma replaces the game's TAA with
-  DLSS but follows the game's render resolution, which this sets. Optionally sharpens
-  textures to match the DLSS mode.
-- **Detail**: texture streaming pool sized to your video card, 16x texture filtering, sharper
-  (4096) and further shadows, further view distance with less pop-in, and top-quality screen
-  space reflections; more shadow cascades and softer cascade blending, further grass, full
-  foliage density, and more detailed characters and terrain.
-- **GTAO**: ground-truth ambient occlusion in place of the game's SSAO, with strength and
-  radius settings: deeper shading in corners and creases, none on open surfaces, no dark halos.
-- **Soft and contact sun shadows**: sun shadows that soften with distance from what casts
-  them (sun size setting), and small contact shadows where objects meet surfaces.
-- **Lighting**: more SSAO levels, finer volumetric fog, full-resolution character shadows,
-  higher-quality skin, smoke and glass lighting, bloom, light shafts, cutscene depth of field
-  and reflections on rough surfaces, each shown next to the game's own value.
+The overlay has one tab per area. Every setting has a **Game** choice (the game's own
+behaviour), and hovering it explains it and shows the game's value.
+
+- **Image**: the **DLSS mode** for [Luma](https://github.com/Filoppi/Luma-Framework) (DLAA,
+  Quality, Balanced, Performance or Ultra Performance, changed live: Luma replaces the game's
+  TAA with DLSS but follows the game's render resolution, which this sets), texture
+  sharpness to match the DLSS mode, and cutscene depth of field.
+- **Detail**: texture memory sized to your video card, 16x texture filtering, further view,
+  grass and foliage distance with less pop-in, and more detailed characters and terrain.
+- **Shadows**: sharper (4096) and further shadows, more cascades with softer blending,
+  **soft sun shadows** that soften with distance from what casts them, **contact shadows**
+  where objects meet surfaces, and smoother character shadows.
+- **Lighting**: ambient occlusion with more of the game's levels or **GTAO** in their place
+  (deeper shading in corners and creases, none on open surfaces, no dark halos; strength and
+  radius settings), better reflections, finer volumetric fog, light shafts, bloom, smoke and
+  glass lighting, and skin scattering.
+- **Advanced**: every console variable the settings control, the game's value and the current
+  one, and a reset for everything.
 
 Settings are kept in `ReShade.ini` under `[FallenOrderTweaks]` and applied every time the game
 starts. Jedi: Survivor isn't affected: it shares Fallen Order's config folder, which is why
