@@ -10,8 +10,8 @@
 //              without this it always runs DLAA.
 //   Detail     texture streaming pool by video memory, 16x anisotropic filtering, sharper and
 //              further shadows, further view distance, and top-quality screen space reflections
-//   Experimental  engine features to try, each shown next to the game's own value: SSAO
-//              levels, volumetric fog, capsule shadows and skin scattering (all off by default)
+//   Lighting   more SSAO levels, finer volumetric fog, full-resolution capsule shadows and
+//              high-quality skin scattering, each shown next to the game's own value
 //
 // What it records, next to the game executable:
 //   FallenOrderTweaks.log  the console manager scan, the layout check, and every value it
@@ -440,30 +440,31 @@ void ApplyDetail() {
     Drive(L"r.SSR.Quality", g_detail.on && g_detail.reflections, 4.0f);
 }
 
-// ---------------------------------------------------------------- experimental
+// ---------------------------------------------------------------- lighting
 
-// Engine features UE 4.21 ships but the game may not use: tried in game before they become
-// real settings. Each row's choice 0 is the game's own; choice n forces values[n - 1].
+// Engine features the game leaves below their best, confirmed in game to make a visible
+// difference. Each row's choice 0 is the game's own; choice n forces values[n - 1].
 struct CvarValue {
     const wchar_t* cvar;
     float value;
 };
 
-struct Experiment {
+struct LightingRow {
     const char* key;   // ReShade.ini
     const char* name;
     const char* help;
     const wchar_t* shown;  // the cvar whose game value the row shows
     std::vector<const char*> labels;
     std::vector<std::vector<CvarValue>> values;
+    int byDefault = 1;  // with nothing saved (and after Reset): the first improved choice
     int choice = 0;
 };
 
-std::vector<Experiment> g_experiments;
-bool g_experimentsInitialised = false;
+std::vector<LightingRow> g_lighting;
+bool g_lightingInitialised = false;
 
-void DefineExperiments() {
-    g_experiments = {
+void DefineLighting() {
+    g_lighting = {
         // Tried and dropped (docs/FINDINGS.md, "Experimental results"): distance field AO and
         // shadows (no distance fields shipped), PCSS soft shadows and contact shadows (no
         // visible change in game).
@@ -489,24 +490,25 @@ void DefineExperiments() {
     };
 }
 
-void SaveExperiments() {
-    for (const Experiment& e : g_experiments) reshade::set_config_value(nullptr, kConfigSection, e.key, e.choice);
+void SaveLighting() {
+    for (const LightingRow& e : g_lighting) reshade::set_config_value(nullptr, kConfigSection, e.key, e.choice);
 }
 
-void InitExperiments() {
-    g_experimentsInitialised = true;
+void InitLighting() {
+    g_lightingInitialised = true;
     std::string line;
-    for (Experiment& e : g_experiments) {
+    for (LightingRow& e : g_lighting) {
+        e.choice = e.byDefault;
         reshade::get_config_value(nullptr, kConfigSection, e.key, e.choice);
         e.choice = std::clamp(e.choice, 0, static_cast<int>(e.labels.size()) - 1);
         line += std::string(line.empty() ? "" : ", ") + e.name + " " + e.labels[e.choice];
     }
-    Log("experimental: %s", line.c_str());
+    Log("lighting: %s", line.c_str());
 }
 
-void ApplyExperiments() {
-    if (!g_experimentsInitialised) InitExperiments();
-    for (const Experiment& e : g_experiments) {
+void ApplyLighting() {
+    if (!g_lightingInitialised) InitLighting();
+    for (const LightingRow& e : g_lighting) {
         // Every cvar any choice of this row touches: forced if the current choice lists it.
         for (const std::vector<CvarValue>& set : e.values)
             for (const CvarValue& cv : set) {
@@ -565,7 +567,7 @@ void OnPresent(command_queue*, swapchain* sc, const rect*, const rect*, uint32_t
     if (!FindManager()) return;
     ApplyUpscale();
     ApplyDetail();
-    ApplyExperiments();
+    ApplyLighting();
     ApplyOverrides();
     if (g_frames % 60 == 0) CheckOverrides();
 }
@@ -720,18 +722,18 @@ void DrawDetail() {
     if (changed) SaveDetail();
 }
 
-void DrawExperimental() {
-    Wrapped("Engine features to try. Each row shows the game's own value: if a setting changes nothing you can "
-            "see, the game probably doesn't use that feature. Saved like the other tabs.");
+void DrawLighting() {
+    Wrapped("Lighting effects the game runs below their best. Each row shows the game's own value. Kept in "
+            "ReShade.ini and applied every time the game starts.");
     ImGui::Spacing();
 
     bool changed = false;
-    if (ImGui::BeginTable("##exp", 3, ImGuiTableFlags_SizingFixedFit)) {
+    if (ImGui::BeginTable("##lighting", 3, ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed,
                                 ImGui::CalcTextSize("Character soft shadows").x + ImGui::GetFontSize());
         ImGui::TableSetupColumn("control", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 11);
         ImGui::TableSetupColumn("game", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 6);
-        for (Experiment& e : g_experiments) {
+        for (LightingRow& e : g_lighting) {
             ImGui::PushID(e.key);
             SettingRow(e.name, e.help);
             changed |= ImGui::Combo("##c", &e.choice, e.labels.data(), static_cast<int>(e.labels.size()));
@@ -748,10 +750,10 @@ void DrawExperimental() {
         ImGui::EndTable();
     }
     if (ResetButton()) {
-        for (Experiment& e : g_experiments) e.choice = 0;
+        for (LightingRow& e : g_lighting) e.choice = e.byDefault;
         changed = true;
     }
-    if (changed) SaveExperiments();
+    if (changed) SaveLighting();
 }
 
 void DrawAdvanced() {
@@ -810,8 +812,8 @@ void DrawOverlay(effect_runtime*) {
         DrawDetail();
         ImGui::EndTabItem();
     }
-    if (ImGui::BeginTabItem("Experimental")) {
-        DrawExperimental();
+    if (ImGui::BeginTabItem("Lighting")) {
+        DrawLighting();
         ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("Advanced")) {
@@ -824,7 +826,7 @@ void DrawOverlay(effect_runtime*) {
 void Install() {
     OpenLog();
     LogGameInfo();
-    DefineExperiments();
+    DefineLighting();
     reshade::register_event<reshade::addon_event::init_device>(&OnInitDevice);
     reshade::register_event<reshade::addon_event::present>(&OnPresent);
     reshade::register_overlay(FOT_PRODUCT, &DrawOverlay);

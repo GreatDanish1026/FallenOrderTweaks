@@ -116,3 +116,5 @@ Tried in game through the Experimental tab:
 - `r.Shadow.FilterMethod 1` (UE 4.21's experimental PCSS) and `r.ContactShadows 1`: no visible
   change, so both were dropped. Contact shadows also need a contact shadow length on each light,
   which the game's lights apparently don't set.
+- More SSAO levels, finer volumetric fog, full-resolution capsule shadows and high-quality skin
+  scattering all make a visible difference, so they became the Lighting tab (0.3.0).
