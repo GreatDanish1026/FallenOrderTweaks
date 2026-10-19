@@ -1,0 +1,9 @@
+# Build output (rebuild with build.ps1)
+bin/
+*.exe
+*.dll
+*.addon64
+
+# Log the add-on writes next to the game
+FallenOrderTweaks*.log
+__pycache__/
