@@ -1,4 +1,4 @@
-# Findings
+﻿# Findings
 
 Notes from reverse-engineering Star Wars Jedi: Fallen Order for FallenOrderTweaks.
 
@@ -78,10 +78,14 @@ float `0x29d9100`, int `0x29d9078`, bool Ref `0x29d9680`, float Ref `0x29d9210`,
 
 ### Threads and priority
 
-OnCVarChange (RVA `0xb1fc10`): on the game thread, for `ECVF_RenderThreadSafe` cvars, it hands
-the copy to the manager's thread propagation callback (`+0xc0`); on any other thread it copies
-at once. ReShade's present runs off the game thread, so Set takes effect directly; no manual
-mirroring as in UE 5.
+OnCVarChange (RVA `0xb1fc10`): only on the game thread does it copy the main value to the
+renderer's (through the manager's thread propagation callback at `+0xc0` for
+`ECVF_RenderThreadSafe` cvars, else directly); off it, it copies nothing and only sets the
+manager's call-the-sinks flag (`+0xcc`). ReShade's present runs on the render thread, so after
+every Set the add-on copies the value itself (`cvars::MirrorToRenderer`): data cvars `+0x38` to
+`+0x3c`, Ref cvars `+0x40` to the engine global (one byte for a bool Ref). Before 0.4.2 this was
+missing (an earlier reading had the branch backwards), so only cvars the game thread reads,
+such as `r.ScreenPercentage`, took effect.
 
 SetBy priorities passed to Set in the game's code: 0x01 (scalability, 7 sites), 0x02 (game
 setting, 19), 0x04, 0x05, 0x07, 0x08 (code, 23), 0x09 (console, 5). The add-on uses
@@ -165,3 +169,6 @@ strength = cb0[34].z / 0.5. The add-on drives it whenever GTAO is on.
 
 First in-game comparison (overcast Bogano, 4K DLAA): GTAO is about as dark as the game's AO on
 average, with tighter contact shading in recesses and creases, no halos and no visible noise.
+
+- Caveat: the PCSS and contact shadow tests ran before 0.4.2's renderer mirroring, so those
+  values may never have reached the renderer; they are worth trying again.

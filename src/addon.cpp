@@ -280,20 +280,20 @@ void ApplyOverrides() {
                 o.haveGame = cvars::GetFloat(o.var, o.game);
                 o.gameFlags = cvars::Flags(o.var);
             }
-            bool ok = cvars::Set(o.var, Text(o.value).c_str(), cvars::kSetByConsole);
+            bool ok = cvars::Set(o.var, Text(o.value).c_str(), cvars::kSetByConsole) && cvars::MirrorToRenderer(o.var);
             float after = 0;
             cvars::GetFloat(o.var, after);
-            Log("override: %ls = %g%s (was %g, now %g)", o.cvar, o.value, ok ? "" : " (Set faulted)", before, after);
+            Log("override: %ls = %g%s (was %g, now %g)", o.cvar, o.value, ok ? "" : " (Set or mirror failed)", before, after);
             o.active = ok;
             o.applied = o.value;
             if (!ok) o.wanted = false;
         } else {
             // Back to the game's priority first, or Set would refuse the lower one.
             cvars::Flags(o.var) = o.gameFlags;
-            bool ok = cvars::Set(o.var, Text(o.game).c_str(), o.gameFlags & 0xff000000);
+            bool ok = cvars::Set(o.var, Text(o.game).c_str(), o.gameFlags & 0xff000000) && cvars::MirrorToRenderer(o.var);
             float after = 0;
             cvars::GetFloat(o.var, after);
-            Log("override: %ls released to %g%s (was %g, now %g)", o.cvar, o.game, ok ? "" : " (Set faulted)", before,
+            Log("override: %ls released to %g%s (was %g, now %g)", o.cvar, o.game, ok ? "" : " (Set or mirror failed)", before,
                 after);
             o.active = false;
         }
@@ -310,6 +310,7 @@ void CheckOverrides() {
             Log("override: %ls changed to %g behind our back; setting %g again%s", o.cvar, now, o.applied,
                 o.repairs == 5 ? " (not logging further repairs)" : "");
         cvars::Set(o.var, Text(o.applied).c_str(), cvars::kSetByConsole);
+        cvars::MirrorToRenderer(o.var);
     }
 }
 

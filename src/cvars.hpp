@@ -20,9 +20,9 @@
 // Storage:
 //   data cvar  main (game thread) value +0x38, renderer's copy right after it (+0x3c)
 //   Ref cvar   pointer to the global the engine reads at +0x38, main value +0x40
-// Set stores the main value and calls OnCVarChange, which on the game thread queues the copy
-// to the renderer's value, and on any other thread (ReShade's present) copies it at once. So
-// unlike UE 5 no manual mirroring is needed.
+// Set stores the main value and calls OnCVarChange, which copies it to the renderer's value
+// (or, for a Ref cvar, to the engine global) only on the game thread. Off it - ReShade's
+// present runs on the render thread - it copies nothing, so MirrorToRenderer does that copy.
 #pragma once
 
 #define WIN32_LEAN_AND_MEAN
@@ -40,7 +40,10 @@ constexpr uint32_t kIsVariableInt = 0x30;
 constexpr uint32_t kAsVariableInt = 0x38;
 constexpr uint32_t kAsVariableFloat = 0x40;
 constexpr uint32_t kSet = 0x60;
+constexpr uint32_t kGetInt = 0x68;
 constexpr uint32_t kGetFloat = 0x70;
+constexpr uint32_t kRefGlobal = 0x38;  // FConsoleVariableRef<T>: T* to the engine global
+constexpr uint32_t kRefValue = 0x40;   // and its own (main) value
 constexpr uint32_t kFlags = 0x18;      // EConsoleVariableFlags; top byte = SetBy priority
 constexpr uint32_t kDataValue = 0x38;  // TConsoleVariableData<T> inside FConsoleVariable<T>
 // What FConsoleManager::ProcessUserConsoleInput passes to Set: the highest priority the game
@@ -214,5 +217,27 @@ inline bool Set(void* var, const wchar_t* value, uint32_t setBy) {
 
 // The flags word; the top byte is the priority of the last Set.
 inline uint32_t& Flags(void* var) { return *reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(var) + kFlags); }
+
+// Copies the main value to where the renderer reads it: what OnCVarChange does on the game
+// thread. Data cvars (int, float): +0x38 to +0x3c. Ref cvars: +0x40 to the engine global; a
+// bool Ref (its GetInt is `movzx eax, byte ptr [rcx+0x40]`) is one byte, the others four. An
+// aligned store, so the render thread sees the old value or the new one, never a mix.
+inline bool MirrorToRenderer(void* var) {
+    auto obj = static_cast<uint8_t*>(var);
+    void* data = nullptr;
+    if ((CallPtr(var, kAsVariableInt, data) && data) || (CallPtr(var, kAsVariableFloat, data) && data)) {
+        uint32_t value;
+        return SafeCopy(&value, data, 4) && SafeCopy(static_cast<uint8_t*>(data) + 4, &value, 4);
+    }
+    uint8_t* global = nullptr;
+    if (!SafeCopy(&global, obj + kRefGlobal, 8) || !global) return false;
+    const uint8_t* getInt = nullptr;
+    uint8_t code[4] = {};
+    bool isBool = SafeCopy(&getInt, *reinterpret_cast<uint8_t**>(obj) + kGetInt, 8) && SafeCopy(code, getInt, 4) &&
+                  code[0] == 0x0f && code[1] == 0xb6 && code[2] == 0x41 && code[3] == kRefValue;
+    uint32_t value;
+    size_t size = isBool ? 1 : 4;
+    return SafeCopy(&value, obj + kRefValue, size) && SafeCopy(global, &value, size);
+}
 
 }  // namespace cvars
