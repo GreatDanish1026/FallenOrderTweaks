@@ -1,4 +1,4 @@
-// FallenOrderTweaks: a ReShade add-on for Star Wars Jedi: Fallen Order (UE 4.21, DirectX 11)
+﻿// FallenOrderTweaks: a ReShade add-on for Star Wars Jedi: Fallen Order (UE 4.21, DirectX 11)
 // that sets the game's console variables from the ReShade overlay, so there is no Engine.ini
 // to edit. Jedi: Survivor reads the same %LOCALAPPDATA%\SwGame config folder, which is why the
 // settings live here instead. See docs/FINDINGS.md.
@@ -10,9 +10,8 @@
 //              without this it always runs DLAA.
 //   Detail     texture streaming pool by video memory, 16x anisotropic filtering, sharper and
 //              further shadows, further view distance, and top-quality screen space reflections
-//   Experimental  engine features to try, each shown next to the game's own value: PCSS soft
-//              shadows, SSAO levels, volumetric fog, capsule shadows, contact shadows and skin
-//              scattering (all off by default)
+//   Experimental  engine features to try, each shown next to the game's own value: SSAO
+//              levels, volumetric fog, capsule shadows and skin scattering (all off by default)
 //
 // What it records, next to the game executable:
 //   FallenOrderTweaks.log  the console manager scan, the layout check, and every value it
@@ -465,11 +464,9 @@ bool g_experimentsInitialised = false;
 
 void DefineExperiments() {
     g_experiments = {
-        // No distance field AO or shadows: the game ships without mesh distance fields
-        // (r.GenerateMeshDistanceFields 0), so they would do nothing.
-        {"ExpSoftShadows", "Soft sun shadows (PCSS)",
-         "UE 4.21's experimental PCSS: shadows soften the farther they fall from what casts them.",
-         L"r.Shadow.FilterMethod", {"Game", "On"}, {{{L"r.Shadow.FilterMethod", 1}}}},
+        // Tried and dropped (docs/FINDINGS.md, "Experimental results"): distance field AO and
+        // shadows (no distance fields shipped), PCSS soft shadows and contact shadows (no
+        // visible change in game).
         {"ExpAmbientOcclusion", "Ambient occlusion",
          "The game's screen space ambient occlusion: more levels give deeper, smoother shading in corners and "
          "creases.\nHigh: 3 levels. Max: 4.",
@@ -486,9 +483,6 @@ void DefineExperiments() {
          "screen resolution instead of half, so they're smoother.",
          L"r.CapsuleShadowsFullResolution", {"Game", "Full resolution"},
          {{{L"r.CapsuleShadows", 1}, {L"r.CapsuleShadowsFullResolution", 1}}}},
-        {"ExpContactShadows", "Contact shadows",
-         "Short screen space shadows where objects touch surfaces, for lights that have a contact shadow length.",
-         L"r.ContactShadows", {"Game", "On"}, {{{L"r.ContactShadows", 1}}}},
         {"ExpSkin", "Skin scattering",
          "Light scattering under the skin of faces and hands.\nHigh: the high quality, full resolution version.",
          L"r.SSS.Quality", {"Game", "High"}, {{{L"r.SSS.Quality", 1}, {L"r.SSS.HalfRes", 0}}}},
@@ -734,7 +728,7 @@ void DrawExperimental() {
     bool changed = false;
     if (ImGui::BeginTable("##exp", 3, ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed,
-                                ImGui::CalcTextSize("Soft sun shadows (PCSS)").x + ImGui::GetFontSize());
+                                ImGui::CalcTextSize("Character soft shadows").x + ImGui::GetFontSize());
         ImGui::TableSetupColumn("control", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 11);
         ImGui::TableSetupColumn("game", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 6);
         for (Experiment& e : g_experiments) {

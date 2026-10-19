@@ -108,3 +108,11 @@ The game ships without mesh distance fields: `r.GenerateMeshDistanceFields` read
 (checked through the add-on). So distance field AO (`r.DistanceFieldAO`) and distance field
 shadows (`r.DistanceFieldShadowing`) have nothing to trace against, and the add-on doesn't
 offer them.
+
+## Experimental results
+
+Tried in game through the Experimental tab:
+
+- `r.Shadow.FilterMethod 1` (UE 4.21's experimental PCSS) and `r.ContactShadows 1`: no visible
+  change, so both were dropped. Contact shadows also need a contact shadow length on each light,
+  which the game's lights apparently don't set.
