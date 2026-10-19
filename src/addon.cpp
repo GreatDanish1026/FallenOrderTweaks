@@ -333,7 +333,7 @@ constexpr int kModeDlaa = 1;
 
 struct UpscaleSettings {
     int mode = kModeDlaa;
-    bool textureBias = false;  // being judged in game (0.5.0): off by default until then
+    bool textureBias = true;
     bool initialised = false;
 };
 UpscaleSettings g_upscale;
@@ -515,51 +515,49 @@ void DefineRows() {
         {"ExpSkin", "Skin scattering",
          "Light scattering under the skin of faces and hands.\nHigh: the high quality, full resolution version.",
          L"r.SSS.Quality", {"Game", "High"}, {{{L"r.SSS.Quality", 1}, {L"r.SSS.HalfRes", 0}}}},
-        // Being judged in game (0.5.0): the game's own by default until then.
         {"FxTranslucencyLighting", "Smoke and glass lighting",
          "Resolution of the lighting volume for particles, smoke, glass and water surfaces. High: 128 (Epic uses "
          "64), so they pick up light and shadow more precisely.",
-         L"r.TranslucencyLightingVolumeDim", {"Game", "High"}, {{{L"r.TranslucencyLightingVolumeDim", 128}}}, 0},
+         L"r.TranslucencyLightingVolumeDim", {"Game", "High"}, {{{L"r.TranslucencyLightingVolumeDim", 128}}}},
         {"FxBloom", "Bloom", "Quality of the glow around bright lights. Max: the highest (5), smoother and wider.",
-         L"r.BloomQuality", {"Game", "Max"}, {{{L"r.BloomQuality", 5}}}, 0},
+         L"r.BloomQuality", {"Game", "Max"}, {{{L"r.BloomQuality", 5}}}},
         {"FxLightShafts", "Light shafts",
          "Screen space light shafts (god rays) from the sun through gaps and foliage. On: the high quality "
          "version.",
-         L"r.LightShaftQuality", {"Game", "On"}, {{{L"r.LightShaftQuality", 1}}}, 0},
+         L"r.LightShaftQuality", {"Game", "On"}, {{{L"r.LightShaftQuality", 1}}}},
         {"FxDepthOfField", "Cutscene depth of field",
          "Quality of the background blur in cutscenes and photo mode. High: the higher quality accumulator, "
          "smoother bokeh with less flicker.",
-         L"r.DOF.Gather.AccumulatorQuality", {"Game", "High"}, {{{L"r.DOF.Gather.AccumulatorQuality", 1}}}, 0},
+         L"r.DOF.Gather.AccumulatorQuality", {"Game", "High"}, {{{L"r.DOF.Gather.AccumulatorQuality", 1}}}},
         {"FxReflectionRoughness", "Rough surface reflections",
          "How rough a surface can be and still get screen space reflections. More: up to 0.8, so wet stone, "
          "metal and floors reflect too. Costs some performance and can look noisy.",
-         L"r.SSR.MaxRoughness", {"Game", "More"}, {{{L"r.SSR.MaxRoughness", 0.8f}}}, 0},
+         L"r.SSR.MaxRoughness", {"Game", "More"}, {{{L"r.SSR.MaxRoughness", 0.8f}}}},
     };
     g_detailRows.rows = {
-        // Being judged in game (0.5.0): the game's own by default until then.
         {"DetailShadowCascades", "Shadow cascades",
          "Cascades of the sun's shadow map. More keep detailed shadows further from the camera.\nMore: 4. Most: 5.",
          L"r.Shadow.CSM.MaxCascades", {"Game", "More", "Most"},
-         {{{L"r.Shadow.CSM.MaxCascades", 4}}, {{L"r.Shadow.CSM.MaxCascades", 5}}}, 0},
+         {{{L"r.Shadow.CSM.MaxCascades", 4}}, {{L"r.Shadow.CSM.MaxCascades", 5}}}},
         {"DetailCascadeBlend", "Cascade blending",
          "How gradually one shadow cascade fades into the next. Soft: twice as wide, so the line where shadows "
          "get blurrier is harder to see.",
-         L"r.Shadow.CSM.TransitionScale", {"Game", "Soft"}, {{{L"r.Shadow.CSM.TransitionScale", 2}}}, 0},
+         L"r.Shadow.CSM.TransitionScale", {"Game", "Soft"}, {{{L"r.Shadow.CSM.TransitionScale", 2}}}},
         {"DetailGrassDistance", "Grass draw distance",
          "How far away grass is still drawn. Far: twice the distance. Farthest: three times. Less grass pop-in, at "
          "some cost in open areas.",
          L"grass.CullDistanceScale", {"Game", "Far", "Farthest"},
-         {{{L"grass.CullDistanceScale", 2}}, {{L"grass.CullDistanceScale", 3}}}, 0},
+         {{{L"grass.CullDistanceScale", 2}}, {{L"grass.CullDistanceScale", 3}}}},
         {"DetailFoliageDensity", "Foliage density",
          "How much of the placed foliage is drawn. Full: all of it. If the game value already shows 1, this changes "
          "nothing.",
-         L"foliage.DensityScale", {"Game", "Full"}, {{{L"foliage.DensityScale", 1}}}, 0},
+         L"foliage.DensityScale", {"Game", "Full"}, {{{L"foliage.DensityScale", 1}}}},
         {"DetailCharacterLod", "Character detail",
          "Detail level of characters and creatures. Full: their most detailed model at a greater distance.",
-         L"r.SkeletalMeshLODBias", {"Game", "Full"}, {{{L"r.SkeletalMeshLODBias", -1}}}, 0},
+         L"r.SkeletalMeshLODBias", {"Game", "Full"}, {{{L"r.SkeletalMeshLODBias", -1}}}},
         {"DetailTerrainLod", "Terrain detail",
          "Detail level of the landscape. High: more detailed terrain further away.",
-         L"r.LandscapeLODBias", {"Game", "High"}, {{{L"r.LandscapeLODBias", -1}}}, 0},
+         L"r.LandscapeLODBias", {"Game", "High"}, {{{L"r.LandscapeLODBias", -1}}}},
     };
 }
 
