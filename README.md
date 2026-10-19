@@ -5,14 +5,17 @@ the ReShade overlay: no Engine.ini, no launcher.
 
 - **DLSS mode** for [Luma](https://github.com/Filoppi/Luma-Framework): DLAA, Quality,
   Balanced, Performance or Ultra Performance, changed live. Luma replaces the game's TAA with
-  DLSS but follows the game's render resolution, which this sets.
+  DLSS but follows the game's render resolution, which this sets. Optionally sharpens
+  textures to match the DLSS mode.
 - **Detail**: texture streaming pool sized to your video card, 16x texture filtering, sharper
   (4096) and further shadows, further view distance with less pop-in, and top-quality screen
-  space reflections.
-- **GTAO**: ground-truth ambient occlusion in place of the game's SSAO, with a radius
-  setting: deeper shading in corners and creases, none on open surfaces, no dark halos.
-- **Lighting**: more SSAO levels, finer volumetric fog, full-resolution character shadows
-  and higher-quality skin, each shown next to the game's own value.
+  space reflections; more shadow cascades and softer cascade blending, further grass, full
+  foliage density, and more detailed characters and terrain.
+- **GTAO**: ground-truth ambient occlusion in place of the game's SSAO, with strength and
+  radius settings: deeper shading in corners and creases, none on open surfaces, no dark halos.
+- **Lighting**: more SSAO levels, finer volumetric fog, full-resolution character shadows,
+  higher-quality skin, smoke and glass lighting, bloom, light shafts, cutscene depth of field
+  and reflections on rough surfaces, each shown next to the game's own value.
 
 Settings are kept in `ReShade.ini` under `[FallenOrderTweaks]` and applied every time the game
 starts. Jedi: Survivor isn't affected: it shares Fallen Order's config folder, which is why

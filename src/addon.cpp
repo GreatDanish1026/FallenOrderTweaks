@@ -7,12 +7,16 @@
 //   Upscaling  the render resolution DLSS (Luma) upscales from: DLAA / Quality / Balanced /
 //              Performance / Ultra Performance, i.e. r.ScreenPercentage with TAA upsampling.
 //              Luma replaces the game's TAA with DLSS but follows the game's resolution, so
-//              without this it always runs DLAA.
+//              without this it always runs DLAA. Optionally the texture mip bias that goes
+//              with the mode (r.MipMapLODBias = log2(render scale)).
 //   Detail     texture streaming pool by video memory, 16x anisotropic filtering, sharper and
-//              further shadows, further view distance, and top-quality screen space reflections
+//              further shadows, further view distance, and top-quality screen space
+//              reflections; rows for shadow cascades and their blending, grass distance,
+//              foliage density, and character and terrain detail
 //   Lighting   GTAO in place of the game's SSAO (src/shaders/gtao.hlsl), more SSAO levels,
-//              finer volumetric fog, full-resolution capsule shadows and high-quality skin
-//              scattering, each shown next to the game's own value
+//              finer volumetric fog, full-resolution capsule shadows, high-quality skin
+//              scattering, smoke and glass lighting, bloom, light shafts, cutscene depth of
+//              field and reflections on rough surfaces, each shown next to the game's own value
 //
 // What it records, next to the game executable:
 //   FallenOrderTweaks.log  the console manager scan, the layout check, and every value it
@@ -329,18 +333,28 @@ constexpr int kModeDlaa = 1;
 
 struct UpscaleSettings {
     int mode = kModeDlaa;
+    bool textureBias = false;  // being judged in game (0.5.0): off by default until then
     bool initialised = false;
 };
 UpscaleSettings g_upscale;
 
-void SaveUpscale() { reshade::set_config_value(nullptr, kConfigSection, "UpscaleMode", g_upscale.mode); }
+void SaveUpscale() {
+    reshade::set_config_value(nullptr, kConfigSection, "UpscaleMode", g_upscale.mode);
+    reshade::set_config_value(nullptr, kConfigSection, "UpscaleTextureBias", g_upscale.textureBias);
+}
 
 void InitUpscale() {
     g_upscale.initialised = true;
     bool saved = reshade::get_config_value(nullptr, kConfigSection, "UpscaleMode", g_upscale.mode);
+    reshade::get_config_value(nullptr, kConfigSection, "UpscaleTextureBias", g_upscale.textureBias);
     g_upscale.mode = std::clamp(g_upscale.mode, 0, static_cast<int>(std::size(kModes)) - 1);
-    Log("upscaling: %s, mode %s", saved ? "from ReShade.ini" : "default", kModes[g_upscale.mode].label);
+    Log("upscaling: %s, mode %s, texture bias %s", saved ? "from ReShade.ini" : "default",
+        kModes[g_upscale.mode].label, g_upscale.textureBias ? "auto" : "game");
 }
+
+// The texture mip bias for a render scale: log2(render / output), NVIDIA's recommendation for
+// DLSS, so textures keep the detail of the output resolution (0 at DLAA, -1 at Performance).
+float TextureBias(float percent) { return percent > 0 && percent < 100 ? log2f(percent / 100.0f) : 0.0f; }
 
 void ApplyUpscale() {
     if (!g_upscale.initialised) InitUpscale();
@@ -349,6 +363,8 @@ void ApplyUpscale() {
     // Below 100 % the frame reaches the TAA pass (which Luma replaces with DLSS) at the lower
     // resolution, instead of being stretched after it.
     Drive(L"r.TemporalAA.Upsampling", percent > 0 && percent < 100, 1.0f);
+    float bias = TextureBias(percent);
+    Drive(L"r.MipMapLODBias", g_upscale.textureBias && bias < 0, bias);
 }
 
 // ---------------------------------------------------------------- detail
@@ -444,31 +460,39 @@ void ApplyDetail() {
     Drive(L"r.SSR.Quality", g_detail.on && g_detail.reflections, 4.0f);
 }
 
-// ---------------------------------------------------------------- lighting
+// ---------------------------------------------------------------- setting rows
 
-// Engine features the game leaves below their best, confirmed in game to make a visible
-// difference. Each row's choice 0 is the game's own; choice n forces values[n - 1].
+// Settings that force one or more cvars, shown as a row with a choice and the game's own
+// value: the Lighting tab, and the extra rows of the Detail tab. Each row's choice 0 is the
+// game's own; choice n forces values[n - 1].
 struct CvarValue {
     const wchar_t* cvar;
     float value;
 };
 
-struct LightingRow {
+struct CvarRow {
     const char* key;   // ReShade.ini
     const char* name;
     const char* help;
     const wchar_t* shown;  // the cvar whose game value the row shows
     std::vector<const char*> labels;
     std::vector<std::vector<CvarValue>> values;
-    int byDefault = 1;  // with nothing saved (and after Reset): the first improved choice
+    int byDefault = 1;  // with nothing saved (and after Reset): 1 = the first improved choice,
+                        // 0 = the game's own (rows still being judged in game)
     int choice = 0;
 };
 
-std::vector<LightingRow> g_lighting;
-bool g_lightingInitialised = false;
+struct RowList {
+    const char* label;  // for the log
+    std::vector<CvarRow> rows;
+    bool initialised = false;
+};
 
-void DefineLighting() {
-    g_lighting = {
+RowList g_lighting{"lighting"};
+RowList g_detailRows{"detail rows"};
+
+void DefineRows() {
+    g_lighting.rows = {
         // Tried and dropped (docs/FINDINGS.md, "Experimental results"): distance field AO and
         // shadows (no distance fields shipped), PCSS soft shadows and contact shadows (no
         // visible change in game, also with the renderer mirroring).
@@ -491,28 +515,73 @@ void DefineLighting() {
         {"ExpSkin", "Skin scattering",
          "Light scattering under the skin of faces and hands.\nHigh: the high quality, full resolution version.",
          L"r.SSS.Quality", {"Game", "High"}, {{{L"r.SSS.Quality", 1}, {L"r.SSS.HalfRes", 0}}}},
+        // Being judged in game (0.5.0): the game's own by default until then.
+        {"FxTranslucencyLighting", "Smoke and glass lighting",
+         "Resolution of the lighting volume for particles, smoke, glass and water surfaces. High: 128 (Epic uses "
+         "64), so they pick up light and shadow more precisely.",
+         L"r.TranslucencyLightingVolumeDim", {"Game", "High"}, {{{L"r.TranslucencyLightingVolumeDim", 128}}}, 0},
+        {"FxBloom", "Bloom", "Quality of the glow around bright lights. Max: the highest (5), smoother and wider.",
+         L"r.BloomQuality", {"Game", "Max"}, {{{L"r.BloomQuality", 5}}}, 0},
+        {"FxLightShafts", "Light shafts",
+         "Screen space light shafts (god rays) from the sun through gaps and foliage. On: the high quality "
+         "version.",
+         L"r.LightShaftQuality", {"Game", "On"}, {{{L"r.LightShaftQuality", 1}}}, 0},
+        {"FxDepthOfField", "Cutscene depth of field",
+         "Quality of the background blur in cutscenes and photo mode. High: the higher quality accumulator, "
+         "smoother bokeh with less flicker.",
+         L"r.DOF.Gather.AccumulatorQuality", {"Game", "High"}, {{{L"r.DOF.Gather.AccumulatorQuality", 1}}}, 0},
+        {"FxReflectionRoughness", "Rough surface reflections",
+         "How rough a surface can be and still get screen space reflections. More: up to 0.8, so wet stone, "
+         "metal and floors reflect too. Costs some performance and can look noisy.",
+         L"r.SSR.MaxRoughness", {"Game", "More"}, {{{L"r.SSR.MaxRoughness", 0.8f}}}, 0},
+    };
+    g_detailRows.rows = {
+        // Being judged in game (0.5.0): the game's own by default until then.
+        {"DetailShadowCascades", "Shadow cascades",
+         "Cascades of the sun's shadow map. More keep detailed shadows further from the camera.\nMore: 4. Most: 5.",
+         L"r.Shadow.CSM.MaxCascades", {"Game", "More", "Most"},
+         {{{L"r.Shadow.CSM.MaxCascades", 4}}, {{L"r.Shadow.CSM.MaxCascades", 5}}}, 0},
+        {"DetailCascadeBlend", "Cascade blending",
+         "How gradually one shadow cascade fades into the next. Soft: twice as wide, so the line where shadows "
+         "get blurrier is harder to see.",
+         L"r.Shadow.CSM.TransitionScale", {"Game", "Soft"}, {{{L"r.Shadow.CSM.TransitionScale", 2}}}, 0},
+        {"DetailGrassDistance", "Grass draw distance",
+         "How far away grass is still drawn. Far: twice the distance. Farthest: three times. Less grass pop-in, at "
+         "some cost in open areas.",
+         L"grass.CullDistanceScale", {"Game", "Far", "Farthest"},
+         {{{L"grass.CullDistanceScale", 2}}, {{L"grass.CullDistanceScale", 3}}}, 0},
+        {"DetailFoliageDensity", "Foliage density",
+         "How much of the placed foliage is drawn. Full: all of it. If the game value already shows 1, this changes "
+         "nothing.",
+         L"foliage.DensityScale", {"Game", "Full"}, {{{L"foliage.DensityScale", 1}}}, 0},
+        {"DetailCharacterLod", "Character detail",
+         "Detail level of characters and creatures. Full: their most detailed model at a greater distance.",
+         L"r.SkeletalMeshLODBias", {"Game", "Full"}, {{{L"r.SkeletalMeshLODBias", -1}}}, 0},
+        {"DetailTerrainLod", "Terrain detail",
+         "Detail level of the landscape. High: more detailed terrain further away.",
+         L"r.LandscapeLODBias", {"Game", "High"}, {{{L"r.LandscapeLODBias", -1}}}, 0},
     };
 }
 
-void SaveLighting() {
-    for (const LightingRow& e : g_lighting) reshade::set_config_value(nullptr, kConfigSection, e.key, e.choice);
+void SaveRows(const RowList& list) {
+    for (const CvarRow& e : list.rows) reshade::set_config_value(nullptr, kConfigSection, e.key, e.choice);
 }
 
-void InitLighting() {
-    g_lightingInitialised = true;
+void InitRows(RowList& list) {
+    list.initialised = true;
     std::string line;
-    for (LightingRow& e : g_lighting) {
+    for (CvarRow& e : list.rows) {
         e.choice = e.byDefault;
         reshade::get_config_value(nullptr, kConfigSection, e.key, e.choice);
         e.choice = std::clamp(e.choice, 0, static_cast<int>(e.labels.size()) - 1);
         line += std::string(line.empty() ? "" : ", ") + e.name + " " + e.labels[e.choice];
     }
-    Log("lighting: %s", line.c_str());
+    Log("%s: %s", list.label, line.c_str());
 }
 
-void ApplyLighting() {
-    if (!g_lightingInitialised) InitLighting();
-    for (const LightingRow& e : g_lighting) {
+void ApplyRows(RowList& list) {
+    if (!list.initialised) InitRows(list);
+    for (const CvarRow& e : list.rows) {
         // Every cvar any choice of this row touches: forced if the current choice lists it.
         for (const std::vector<CvarValue>& set : e.values)
             for (const CvarValue& cv : set) {
@@ -606,7 +675,7 @@ bool OnCreatePipeline(device* dev, pipeline_layout, uint32_t count, const pipeli
 }
 
 void ApplyGtao() {
-    // After ApplyLighting, so this wins over its ambient occlusion levels.
+    // After ApplyRows(g_lighting), so this wins over its ambient occlusion levels.
     if (g_gtao.on) Drive(L"r.AmbientOcclusionLevels", true, 1.0f);
     Drive(L"r.AmbientOcclusionRadiusScale", g_gtao.on && g_gtao.radiusPercent != 100, g_gtao.radiusPercent / 100.0f);
     // Always while on, so the shader never reads the game's own value as a strength.
@@ -658,7 +727,8 @@ void OnPresent(command_queue*, swapchain* sc, const rect*, const rect*, uint32_t
     if (!FindManager()) return;
     ApplyUpscale();
     ApplyDetail();
-    ApplyLighting();
+    ApplyRows(g_lighting);
+    ApplyRows(g_detailRows);
     ApplyGtao();
     ApplyOverrides();
     if (g_frames % 60 == 0) CheckOverrides();
@@ -727,12 +797,27 @@ void DrawUpscale() {
         for (size_t i = 0; i < std::size(kModes); ++i) labels[i] = kModes[i].label;
         changed |= ImGui::Combo("##mode", &g_upscale.mode, labels, static_cast<int>(std::size(kModes)));
         Help(help);
+
+        const char* biasHelp = "Below DLAA the game picks texture detail for the lower render resolution, so "
+                               "textures look softer than they should. Match DLSS: sharpens them back to the "
+                               "detail of your screen resolution (NVIDIA's recommended texture bias for DLSS). "
+                               "Nothing changes at DLAA.";
+        SettingRow("Texture sharpness", biasHelp);
+        int bias = g_upscale.textureBias ? 1 : 0;
+        const char* biases[] = {"Game", "Match DLSS"};
+        if (ImGui::Combo("##bias", &bias, biases, 2)) {
+            g_upscale.textureBias = bias == 1;
+            changed = true;
+        }
+        Help(biasHelp);
         ImGui::EndTable();
     }
     float percent = kModes[g_upscale.mode].percent;
     if (percent > 0 && g_outputWidth) {
         ImGui::TextDisabled("Renders at %u x %u, output %u x %u", static_cast<uint32_t>(lroundf(g_outputWidth * percent / 100)),
                             static_cast<uint32_t>(lroundf(g_outputHeight * percent / 100)), g_outputWidth, g_outputHeight);
+        if (g_upscale.textureBias && TextureBias(percent) < 0)
+            ImGui::TextDisabled("Texture bias %.2f", TextureBias(percent));
     }
     ImGui::Spacing();
     if (LumaLoaded())
@@ -742,6 +827,8 @@ void DrawUpscale() {
         ImGui::TextColored(kWarn, "Luma is not loaded: below 100 %% the game's own TAA upscales instead of DLSS.");
     if (changed) SaveUpscale();
 }
+
+bool DrawRows(RowList& list, const char* id);
 
 void DrawDetail() {
     bool changed = ImGui::Checkbox("Improve textures, shadows and view distance", &g_detail.on);
@@ -804,14 +891,48 @@ void DrawDetail() {
     }
     if (!g_detail.on) ImGui::EndDisabled();
     ImGui::Spacing();
+    bool rowsChanged = DrawRows(g_detailRows, "##detailRows");
+    ImGui::Spacing();
     Wrapped("These take priority over the game's graphics menu for the same settings. Film grain, motion blur and "
             "chromatic aberration are in the game's own menu.");
     if (ResetButton()) {
         g_detail = DetailSettings{};
         g_detail.initialised = true;
-        changed = true;
+        for (CvarRow& e : g_detailRows.rows) e.choice = e.byDefault;
+        changed = rowsChanged = true;
     }
     if (changed) SaveDetail();
+    if (rowsChanged) SaveRows(g_detailRows);
+}
+
+// A row list as a table: name | choice | the game's own value. True if a choice changed.
+bool DrawRows(RowList& list, const char* id) {
+    bool changed = false;
+    if (!ImGui::BeginTable(id, 3, ImGuiTableFlags_SizingFixedFit)) return false;
+    ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed,
+                            ImGui::CalcTextSize("Rough surface reflections").x + ImGui::GetFontSize());
+    ImGui::TableSetupColumn("control", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 11);
+    ImGui::TableSetupColumn("game", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 6);
+    for (CvarRow& e : list.rows) {
+        ImGui::PushID(e.key);
+        // GTAO runs at one level: the levels choice does nothing while it's on.
+        bool locked = g_gtao.on && wcscmp(e.shown, L"r.AmbientOcclusionLevels") == 0;
+        SettingRow(e.name, locked ? "Not used while GTAO is on." : e.help);
+        if (locked) ImGui::BeginDisabled();
+        changed |= ImGui::Combo("##c", &e.choice, e.labels.data(), static_cast<int>(e.labels.size()));
+        if (locked) ImGui::EndDisabled();
+        Help(locked ? "Not used while GTAO is on." : e.help);
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        float game = 0;
+        if (GameValue(*FindOverride(e.shown), game))
+            ImGui::TextDisabled("game: %g", game);
+        else
+            ImGui::TextDisabled("game: -");
+        ImGui::PopID();
+    }
+    ImGui::EndTable();
+    return changed;
 }
 
 void DrawLighting() {
@@ -848,39 +969,14 @@ void DrawLighting() {
     if (gtaoChanged) SaveGtao();
     ImGui::Spacing();
 
-    bool changed = false;
-    if (ImGui::BeginTable("##lighting", 3, ImGuiTableFlags_SizingFixedFit)) {
-        ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed,
-                                ImGui::CalcTextSize("Character soft shadows").x + ImGui::GetFontSize());
-        ImGui::TableSetupColumn("control", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 11);
-        ImGui::TableSetupColumn("game", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 6);
-        for (LightingRow& e : g_lighting) {
-            ImGui::PushID(e.key);
-            // GTAO runs at one level: the levels choice does nothing while it's on.
-            bool locked = g_gtao.on && wcscmp(e.shown, L"r.AmbientOcclusionLevels") == 0;
-            SettingRow(e.name, locked ? "Not used while GTAO is on." : e.help);
-            if (locked) ImGui::BeginDisabled();
-            changed |= ImGui::Combo("##c", &e.choice, e.labels.data(), static_cast<int>(e.labels.size()));
-            if (locked) ImGui::EndDisabled();
-            Help(locked ? "Not used while GTAO is on." : e.help);
-            ImGui::TableNextColumn();
-            ImGui::AlignTextToFramePadding();
-            float game = 0;
-            if (GameValue(*FindOverride(e.shown), game))
-                ImGui::TextDisabled("game: %g", game);
-            else
-                ImGui::TextDisabled("game: -");
-            ImGui::PopID();
-        }
-        ImGui::EndTable();
-    }
+    bool changed = DrawRows(g_lighting, "##lighting");
     if (ResetButton()) {
-        for (LightingRow& e : g_lighting) e.choice = e.byDefault;
+        for (CvarRow& e : g_lighting.rows) e.choice = e.byDefault;
         g_gtao = GtaoSettings{};
         SaveGtao();
         changed = true;
     }
-    if (changed) SaveLighting();
+    if (changed) SaveRows(g_lighting);
 }
 
 void DrawAdvanced() {
@@ -953,7 +1049,7 @@ void DrawOverlay(effect_runtime*) {
 void Install() {
     OpenLog();
     LogGameInfo();
-    DefineLighting();
+    DefineRows();
     InitGtao();
     reshade::register_event<reshade::addon_event::create_pipeline>(&OnCreatePipeline);
     reshade::register_event<reshade::addon_event::init_device>(&OnInitDevice);
