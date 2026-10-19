@@ -118,3 +118,43 @@ Tried in game through the Experimental tab:
   which the game's lights apparently don't set.
 - More SSAO levels, finer volumetric fog, full-resolution capsule shadows and high-quality skin
   scattering all make a visible difference, so they became the Lighting tab (0.3.0).
+
+## Ambient occlusion
+
+Unreal's global shaders ship precompiled in `Engine/GlobalShaderCache-PCD3D_SM5.bin` (the
+newest copy is in `pakchunk0-WindowsNoEditor_1_P.pak`, Oodle-compressed; `tools/pak.py` reads
+pak version 7). In the cache each shader's type name (an FString) is followed by its
+zlib-compressed code: a variable-length Unreal header (packed resource table, 24-124 bytes),
+the DXBC container, and Unreal's own data after it. `tools/gsc.py` extracts and names them;
+`tools/disasm.py` disassembles them (reflection is stripped: only ISGN, OSGN and SHEX).
+
+`FPostProcessAmbientOcclusionPS<SetupAsInput, Upsample, Quality>`: `PS1xx` read the
+downsampled setup texture (coarse levels), `PS0xx` the scene textures directly (the
+full-resolution level). With `r.AmbientOcclusionLevels 1` only `PS00Q` runs (no setup, no
+upsample). Its bindings:
+
+| Register | Meaning |
+|---|---|
+| v0 | xy scene texture UV, zw screen position |
+| t0 / t1 / t2 | scene depth (device Z) / GBuffer A (normal) / GBuffer B (shading model in a; 7 = hair gets no normal) |
+| t3 | HZB, sampled at a mip per step through cb0[38] |
+| t4 | random rotation texture, at `v0.xy * cb0[31].xy + cb0[33].xy` |
+| cb0[30] | x power, y normal bias, w intensity |
+| cb0[31] | z radius, w aspect ratio |
+| cb0[32] | x bias scale, z radius in world space (1) or screen space (0) |
+| cb0[33] | w 1 / tan(half FOV) |
+| cb0[34] | xy distance fade (`saturate(depth * x + y)`), z HZB mip scale |
+| cb1[8..10] | View TranslatedWorldToView rows |
+| cb1[57] | View InvDeviceZToWorldZTransform (`z * x + y + 1 / (z * z' - w)`) |
+
+Output (every channel): `1 - intensity * (1 - lerp(visibility, 1, fade) ^ power)`, with
+visibility the average of `(1 - max horizon)^2` over 10 HZB sample pairs.
+
+The multi-level variants (`PS01Q`) also read the coarser level (t3 setup, t4 AO, cb0[4].zw its
+texel size) and blend it in with weight cb0[32].w; there t5 is the HZB and t6 the random
+texture.
+
+GTAO (`src/shaders/gtao.hlsl`) replaces `PS000`-`PS004` with the same bindings and output
+formula, tracing the full-resolution depth instead of the HZB. The add-on forces
+`r.AmbientOcclusionLevels 1` while it's on, and `r.AmbientOcclusionRadiusScale` sets its
+radius.

@@ -9,6 +9,8 @@ the ReShade overlay: no Engine.ini, no launcher.
 - **Detail**: texture streaming pool sized to your video card, 16x texture filtering, sharper
   (4096) and further shadows, further view distance with less pop-in, and top-quality screen
   space reflections.
+- **GTAO**: ground-truth ambient occlusion in place of the game's SSAO, with a radius
+  setting: deeper shading in corners and creases, none on open surfaces, no dark halos.
 - **Lighting**: more SSAO levels, finer volumetric fog, full-resolution character shadows
   and higher-quality skin, each shown next to the game's own value.
 

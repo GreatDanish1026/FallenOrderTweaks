@@ -10,8 +10,9 @@
 //              without this it always runs DLAA.
 //   Detail     texture streaming pool by video memory, 16x anisotropic filtering, sharper and
 //              further shadows, further view distance, and top-quality screen space reflections
-//   Lighting   more SSAO levels, finer volumetric fog, full-resolution capsule shadows and
-//              high-quality skin scattering, each shown next to the game's own value
+//   Lighting   GTAO in place of the game's SSAO (src/shaders/gtao.hlsl), more SSAO levels,
+//              finer volumetric fog, full-resolution capsule shadows and high-quality skin
+//              scattering, each shown next to the game's own value
 //
 // What it records, next to the game executable:
 //   FallenOrderTweaks.log  the console manager scan, the layout check, and every value it
@@ -27,6 +28,7 @@
 #include <reshade.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -36,6 +38,7 @@
 #include <vector>
 
 #include "cvars.hpp"
+#include "shaders/gtao_blob.h"
 #include "version.h"
 
 extern "C" __declspec(dllexport) const char* NAME = FOT_PRODUCT;
@@ -522,6 +525,83 @@ void ApplyLighting() {
     }
 }
 
+// ---------------------------------------------------------------- GTAO
+
+// The game's single-level, full-resolution AO pass (FPostProcessAmbientOcclusionPS<0, 0, Q>,
+// quality 0-4; 3 and 4 compile to the same code), from GlobalShaderCache-PCD3D_SM5.bin in
+// pakchunk0-WindowsNoEditor_1_P.pak (tools/gsc.py). It only runs with
+// r.AmbientOcclusionLevels 1, which GTAO forces; with GTAO off the levels go back to the
+// game's and its own multi-level passes, never replaced, run as before.
+struct AoTarget {
+    const char* name;
+    uint8_t digest[16];  // DXBC container hash (bytes 4..20)
+    size_t size;
+};
+const AoTarget kAoTargets[] = {
+    {"quality 0", {0x81, 0x18, 0xe6, 0xa8, 0xdf, 0xbe, 0x54, 0xcf, 0x93, 0x6f, 0x2b, 0x5a, 0xcd, 0x8b, 0x3d, 0xad}, 7964},
+    {"quality 1", {0x9d, 0x53, 0x9f, 0xd1, 0x50, 0x0c, 0x71, 0xcb, 0x2c, 0x2e, 0x4b, 0x1c, 0x0c, 0x2f, 0x29, 0x75}, 8880},
+    {"quality 2", {0x4a, 0x36, 0x41, 0x52, 0xd0, 0x35, 0x27, 0x4f, 0x53, 0xd7, 0xc3, 0x3f, 0x01, 0x43, 0x6a, 0x34}, 13824},
+    {"quality 3-4", {0x19, 0x6c, 0x63, 0xcb, 0x44, 0x8b, 0x24, 0x93, 0x0f, 0x2b, 0x5a, 0xcf, 0xb0, 0xf5, 0x9a, 0x3b}, 16952},
+};
+
+struct GtaoSettings {
+    bool on = true;
+    int radiusPercent = 100;  // r.AmbientOcclusionRadiusScale x 100
+};
+GtaoSettings g_gtao;
+std::atomic<int> g_gtaoReplaced{0};  // AO pass shaders swapped for GTAO
+std::atomic<int> g_gtaoMissed{0};    // created while GTAO was off: original until restart
+
+void SaveGtao() {
+    reshade::set_config_value(nullptr, kConfigSection, "GtaoOn", g_gtao.on);
+    reshade::set_config_value(nullptr, kConfigSection, "GtaoRadiusPercent", g_gtao.radiusPercent);
+}
+
+// At load, before the game creates its shaders.
+void InitGtao() {
+    reshade::get_config_value(nullptr, kConfigSection, "GtaoOn", g_gtao.on);
+    reshade::get_config_value(nullptr, kConfigSection, "GtaoRadiusPercent", g_gtao.radiusPercent);
+    g_gtao.radiusPercent = std::clamp(g_gtao.radiusPercent, 50, 200);
+    Log("gtao: %s, radius %d %%", g_gtao.on ? "on" : "off", g_gtao.radiusPercent);
+}
+
+const AoTarget* FindAoTarget(const void* code, size_t size) {
+    if (!code || size < 20 || memcmp(code, "DXBC", 4) != 0) return nullptr;
+    for (const AoTarget& t : kAoTargets)
+        if (size == t.size && memcmp(static_cast<const uint8_t*>(code) + 4, t.digest, 16) == 0) return &t;
+    return nullptr;
+}
+
+// ReShade hands us its copy of the shader description, so changing it changes what the
+// driver compiles. kGtaoPs is static, so it outlives the call.
+bool OnCreatePipeline(device* dev, pipeline_layout, uint32_t count, const pipeline_subobject* subobjects) {
+    if (dev->get_api() != device_api::d3d11) return false;
+    bool changed = false;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (subobjects[i].type != pipeline_subobject_type::pixel_shader || !subobjects[i].data) continue;
+        auto* desc = static_cast<shader_desc*>(subobjects[i].data);
+        const AoTarget* t = FindAoTarget(desc->code, desc->code_size);
+        if (!t) continue;
+        if (!g_gtao.on) {
+            ++g_gtaoMissed;
+            Log("gtao: AO pass (%s) created while GTAO is off: the game's own until restart", t->name);
+            continue;
+        }
+        desc->code = kGtaoPs;
+        desc->code_size = sizeof(kGtaoPs);
+        changed = true;
+        ++g_gtaoReplaced;
+        Log("gtao: replacing the AO pass (%s)", t->name);
+    }
+    return changed;
+}
+
+void ApplyGtao() {
+    // After ApplyLighting, so this wins over its ambient occlusion levels.
+    if (g_gtao.on) Drive(L"r.AmbientOcclusionLevels", true, 1.0f);
+    Drive(L"r.AmbientOcclusionRadiusScale", g_gtao.on && g_gtao.radiusPercent != 100, g_gtao.radiusPercent / 100.0f);
+}
+
 // ---------------------------------------------------------------- events
 
 uint64_t g_frames = 0;
@@ -568,6 +648,7 @@ void OnPresent(command_queue*, swapchain* sc, const rect*, const rect*, uint32_t
     ApplyUpscale();
     ApplyDetail();
     ApplyLighting();
+    ApplyGtao();
     ApplyOverrides();
     if (g_frames % 60 == 0) CheckOverrides();
 }
@@ -727,6 +808,30 @@ void DrawLighting() {
             "ReShade.ini and applied every time the game starts.");
     ImGui::Spacing();
 
+    bool gtaoChanged = ImGui::Checkbox("Ground-truth ambient occlusion (GTAO)", &g_gtao.on);
+    const char* gtaoHelp = "Replaces the game's ambient occlusion with GTAO: deeper, more accurate shading in "
+                           "corners, creases and under objects, none on open surfaces, and no dark halos around "
+                           "thin objects. The game's own AO strength and distance fade still apply.";
+    Help(gtaoHelp);
+    if (g_gtao.on) {
+        if (BeginSettings("##gtao", "GTAO radius")) {
+            const char* radiusHelp = "How far GTAO looks for occluders, relative to the game's AO radius. Larger "
+                                     "reaches further from corners; smaller keeps it to contact shading.";
+            SettingRow("GTAO radius", radiusHelp);
+            gtaoChanged |= ImGui::SliderInt("##radius", &g_gtao.radiusPercent, 50, 200, "%d %%");
+            Help(radiusHelp);
+            ImGui::EndTable();
+        }
+        if (g_gtaoReplaced > 0)
+            ImGui::TextDisabled("Active.");
+        else if (g_gtaoMissed > 0)
+            ImGui::TextColored(kWarn, "Restart the game to switch GTAO on.");
+        else
+            ImGui::TextDisabled("Waiting for the game to create its AO pass.");
+    }
+    if (gtaoChanged) SaveGtao();
+    ImGui::Spacing();
+
     bool changed = false;
     if (ImGui::BeginTable("##lighting", 3, ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed,
@@ -735,9 +840,13 @@ void DrawLighting() {
         ImGui::TableSetupColumn("game", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 6);
         for (LightingRow& e : g_lighting) {
             ImGui::PushID(e.key);
-            SettingRow(e.name, e.help);
+            // GTAO runs at one level: the levels choice does nothing while it's on.
+            bool locked = g_gtao.on && wcscmp(e.shown, L"r.AmbientOcclusionLevels") == 0;
+            SettingRow(e.name, locked ? "Not used while GTAO is on." : e.help);
+            if (locked) ImGui::BeginDisabled();
             changed |= ImGui::Combo("##c", &e.choice, e.labels.data(), static_cast<int>(e.labels.size()));
-            Help(e.help);
+            if (locked) ImGui::EndDisabled();
+            Help(locked ? "Not used while GTAO is on." : e.help);
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
             float game = 0;
@@ -751,6 +860,8 @@ void DrawLighting() {
     }
     if (ResetButton()) {
         for (LightingRow& e : g_lighting) e.choice = e.byDefault;
+        g_gtao = GtaoSettings{};
+        SaveGtao();
         changed = true;
     }
     if (changed) SaveLighting();
@@ -827,6 +938,8 @@ void Install() {
     OpenLog();
     LogGameInfo();
     DefineLighting();
+    InitGtao();
+    reshade::register_event<reshade::addon_event::create_pipeline>(&OnCreatePipeline);
     reshade::register_event<reshade::addon_event::init_device>(&OnInitDevice);
     reshade::register_event<reshade::addon_event::present>(&OnPresent);
     reshade::register_overlay(FOT_PRODUCT, &DrawOverlay);
