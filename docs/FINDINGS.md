@@ -101,3 +101,10 @@ PE timestamp, but its code is encrypted on disk (an extra `.ooa` section, EA's D
 and decrypted only in memory, so offline analysis uses `SwGame-Win64-Shipping.exe`. At run
 time the add-on scans the decrypted image. `r.ScreenPercentage` alone is looked up only 4
 times, so the scan votes over 20 names (62 of 63 lookups agree on the singleton).
+
+## Distance fields
+
+The game ships without mesh distance fields: `r.GenerateMeshDistanceFields` reads 0 in game
+(checked through the add-on). So distance field AO (`r.DistanceFieldAO`) and distance field
+shadows (`r.DistanceFieldShadowing`) have nothing to trace against, and the add-on doesn't
+offer them.

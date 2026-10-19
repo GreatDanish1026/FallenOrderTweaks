@@ -9,9 +9,9 @@ the ReShade overlay: no Engine.ini, no launcher.
 - **Detail**: texture streaming pool sized to your video card, 16x texture filtering, sharper
   (4096) and further shadows, further view distance with less pop-in, and top-quality screen
   space reflections.
-- **Experimental**: engine features to try, each shown next to the game's own value: distance
-  field AO and shadows, soft (PCSS) sun shadows, more SSAO levels, finer volumetric fog,
-  full-resolution character shadows, contact shadows and higher-quality skin. Off by default.
+- **Experimental**: engine features to try, each shown next to the game's own value: soft
+  (PCSS) sun shadows, more SSAO levels, finer volumetric fog, full-resolution character
+  shadows, contact shadows and higher-quality skin. Off by default.
 
 Settings are kept in `ReShade.ini` under `[FallenOrderTweaks]` and applied every time the game
 starts. Jedi: Survivor isn't affected: it shares Fallen Order's config folder, which is why

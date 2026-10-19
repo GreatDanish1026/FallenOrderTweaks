@@ -10,9 +10,9 @@
 //              without this it always runs DLAA.
 //   Detail     texture streaming pool by video memory, 16x anisotropic filtering, sharper and
 //              further shadows, further view distance, and top-quality screen space reflections
-//   Experimental  engine features to try, each shown next to the game's own value: distance
-//              field AO and shadows, PCSS soft shadows, SSAO levels, volumetric fog, capsule
-//              shadows, contact shadows and skin scattering (all off by default)
+//   Experimental  engine features to try, each shown next to the game's own value: PCSS soft
+//              shadows, SSAO levels, volumetric fog, capsule shadows, contact shadows and skin
+//              scattering (all off by default)
 //
 // What it records, next to the game executable:
 //   FallenOrderTweaks.log  the console manager scan, the layout check, and every value it
@@ -465,17 +465,8 @@ bool g_experimentsInitialised = false;
 
 void DefineExperiments() {
     g_experiments = {
-        {"ExpDistanceFieldAO", "Distance field AO",
-         "Ambient occlusion traced against the level's distance fields: large-scale shading under overhangs and "
-         "in rooms, lit by the sky. Only works if the game shipped distance field data (see above).\n"
-         "Max: on, at top quality and full resolution.",
-         L"r.DistanceFieldAO", {"Game", "Max"},
-         {{{L"r.DistanceFieldAO", 1}, {L"r.AOQuality", 2}, {L"r.DFFullResolution", 1}}}},
-        {"ExpDistanceFieldShadows", "Distance field shadows",
-         "Soft shadows traced against distance fields, for lights the level designers set up for them (often "
-         "distant sun shadows). Needs distance field data.\nMax: on, at top quality.",
-         L"r.DistanceFieldShadowing", {"Game", "Max"},
-         {{{L"r.DistanceFieldShadowing", 1}, {L"r.DFShadowQuality", 3}}}},
+        // No distance field AO or shadows: the game ships without mesh distance fields
+        // (r.GenerateMeshDistanceFields 0), so they would do nothing.
         {"ExpSoftShadows", "Soft sun shadows (PCSS)",
          "UE 4.21's experimental PCSS: shadows soften the farther they fall from what casts them.",
          L"r.Shadow.FilterMethod", {"Game", "On"}, {{{L"r.Shadow.FilterMethod", 1}}}},
@@ -738,14 +729,6 @@ void DrawDetail() {
 void DrawExperimental() {
     Wrapped("Engine features to try. Each row shows the game's own value: if a setting changes nothing you can "
             "see, the game probably doesn't use that feature. Saved like the other tabs.");
-    float df = 0;
-    bool haveDf = GameValue(*FindOverride(L"r.GenerateMeshDistanceFields"), df);
-    if (!haveDf)
-        ImGui::TextDisabled("Distance field data: unknown");
-    else if (df != 0)
-        ImGui::Text("Distance field data: shipped (r.GenerateMeshDistanceFields 1)");
-    else
-        ImGui::TextColored(kWarn, "Distance field data: not shipped, so the distance field rows do nothing");
     ImGui::Spacing();
 
     bool changed = false;
