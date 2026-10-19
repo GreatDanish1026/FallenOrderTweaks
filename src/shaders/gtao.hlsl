@@ -13,11 +13,14 @@
 //           screen space (0); [33].w 1 / tan(half FOV), .xy random UV offset;
 //           [34].xy distance fade, .z r.AmbientOcclusionMipLevelFactor (the HZB mip scale,
 //           which GTAO doesn't need: FallenOrderTweaks sets it to 0.5 x the GTAO strength)
-//   cb1     View: [8..10] TranslatedWorldToView rows, [57] InvDeviceZToWorldZTransform
+//   cb1     View: [8..10] TranslatedWorldToView rows, [57] InvDeviceZToWorldZTransform,
+//           [166].x DistanceFieldAOSpecularOcclusionMode: FallenOrderTweaks' settings code
+//           (r.AOSpecularOcclusionMode, shared with the shadow pass), whose digits above the
+//           shadows' four are GTAO's quality (x 10000) and multi-bounce (x 100000)
 // Output: the AO factor in every channel (1 = unoccluded), as the original writes it.
 
 cbuffer Parameters : register(b0) { float4 P[39]; };
-cbuffer View : register(b1) { float4 V[58]; };
+cbuffer View : register(b1) { float4 V[167]; };
 
 Texture2D SceneDepth : register(t0);
 Texture2D GBufferA : register(t1);
@@ -29,8 +32,9 @@ SamplerState GBufferBSampler : register(s2);
 SamplerState RandomSampler : register(s4);
 
 static const float kPi = 3.14159265;
-static const int kSlices = 4;        // each searched both ways
-static const int kSteps = 8;         // per side
+// Quality High, Ultra, Max: slices (each searched both ways) and steps per side.
+static const int kSlices[3] = {4, 6, 8};
+static const int kSteps[3] = {8, 12, 16};
 static const float kMaxRadiusPixels = 256.0;
 // A sample below the current horizon pulls it back down a little, so thin objects in front
 // (railings, branches) don't cast wide dark halos.
@@ -39,6 +43,34 @@ static const uint kShadingModelHair = 7;  // the original gives hair no normal
 static const float kMipFactorPerStrength = 0.5;  // the cvar's default: strength 1
 
 float ConvertFromDeviceZ(float z) { return z * V[57].x + V[57].y + 1.0 / (z * V[57].z - V[57].w); }
+
+struct Settings
+{
+    uint quality;      // 0 High, 1 Ultra, 2 Max
+    bool multiBounce;
+};
+
+// The game's own value (0 or 1) means High, no multi-bounce.
+Settings DecodeSettings()
+{
+    uint code = asuint(V[166].x);
+    Settings st;
+    st.quality = min((code / 10000) % 10, 2);
+    st.multiBounce = (code / 100000) % 10 == 1;
+    return st;
+}
+
+// Light that bounces between surfaces brightens occluded areas: Jimenez et al. 2016's fit
+// for a surface of albedo a. The AO pass doesn't see albedo, so a typical 0.5 is assumed:
+// deep contact shading stays, broad shallow occlusion lifts.
+float MultiBounce(float visibility)
+{
+    const float albedo = 0.5;
+    float a = 2.0404 * albedo - 0.3324;
+    float b = -4.7951 * albedo + 0.6417;
+    float c = 2.7552 * albedo + 0.6903;
+    return max(visibility, ((visibility * a + b) * visibility + c) * visibility);
+}
 
 float2 Rotate(float2 v, float2 cosSin) { return float2(v.x * cosSin.x - v.y * cosSin.y, v.x * cosSin.y + v.y * cosSin.x); }
 
@@ -74,20 +106,23 @@ float4 main(noperspective float4 UVAndScreenPos : TEXCOORD0, float4 SvPosition :
     float radius = P[31].z * lerp(depth, 1.0, P[32].z);  // view units (cm)
     float radiusPixels = min(radius * P[33].w / depth / pixel.x, kMaxRadiusPixels);
     float visibility = 1.0;
+    Settings st = DecodeSettings();
     if (fade < 1.0 && radiusPixels >= 1.0)
     {
+        int slices = kSlices[st.quality];
+        int steps = kSteps[st.quality];
         float negInvR2 = -1.0 / (radius * radius);
         // The game's per-pixel random rotation (its offset moves every frame, so TAA and
         // DLSS average the noise away), and a per-pixel step jitter.
         float2 rnd = RandomNormals.Sample(RandomSampler, uv * P[31].xy + P[33].xy).xz * 2.0 - 1.0;
         float2 rotation = rnd / max(length(rnd), 1e-4);
         float jitter = frac(52.9829189 * frac(dot(SvPosition.xy, float2(0.06711056, 0.00583715))) + rnd.x * 0.5);
-        float stepPixels = radiusPixels / (kSteps + 1);
+        float stepPixels = radiusPixels / (steps + 1);
 
         float sum = 0.0, weight = 0.0;
-        [unroll] for (int slice = 0; slice < kSlices; ++slice)
+        [loop] for (int slice = 0; slice < slices; ++slice)
         {
-            float angle = (slice + 0.5) * (kPi / kSlices);
+            float angle = (slice + 0.5) * (kPi / slices);
             float2 dir = Rotate(float2(cos(angle), sin(angle)), rotation);  // pixels, y up
             float3 sliceDir = normalize(float3(dir * pixel * invFovFix.xy, 0.0));
             float3 orthoDir = sliceDir - dot(sliceDir, v) * v;
@@ -97,12 +132,12 @@ float4 main(noperspective float4 UVAndScreenPos : TEXCOORD0, float4 SvPosition :
             float cosN = saturate(dot(projN, v) / max(projLen, 1e-4));
             float nAngle = (dot(orthoDir, projN) < 0.0 ? -1.0 : 1.0) * acos(cosN);
 
-            float horizonCos[2];
+            float horizonCos0 = -1.0, horizonCos1 = -1.0;
             [unroll] for (int side = 0; side < 2; ++side)
             {
                 float2 sideDir = side ? dir : -dir;
                 float h = -1.0;
-                [unroll] for (int k = 0; k < kSteps; ++k)
+                [loop] for (int k = 0; k < steps; ++k)
                 {
                     float2 s = screenPos + sideDir * pixel * ((k + jitter) * stepPixels + 1.0);
                     float sd = ConvertFromDeviceZ(SceneDepth.SampleLevel(SceneDepthSampler, s * uvScale + uvBias, 0).x);
@@ -114,10 +149,13 @@ float4 main(noperspective float4 UVAndScreenPos : TEXCOORD0, float4 SvPosition :
                     // Only samples within the radius may lower the horizon.
                     h = c > h ? c : lerp(h, c, kHorizonDecay * falloff);
                 }
-                horizonCos[side] = h;
+                if (side)
+                    horizonCos1 = h;
+                else
+                    horizonCos0 = h;
             }
-            float h0 = nAngle + max(-acos(horizonCos[0]) - nAngle, -kPi * 0.5);
-            float h1 = nAngle + min(acos(horizonCos[1]) - nAngle, kPi * 0.5);
+            float h0 = nAngle + max(-acos(horizonCos0) - nAngle, -kPi * 0.5);
+            float h1 = nAngle + min(acos(horizonCos1) - nAngle, kPi * 0.5);
             float sinN = sin(nAngle), cosNA = cos(nAngle);
             float arc = (-cos(2.0 * h0 - nAngle) + cosNA + 2.0 * h0 * sinN) +
                         (-cos(2.0 * h1 - nAngle) + cosNA + 2.0 * h1 * sinN);
@@ -129,6 +167,8 @@ float4 main(noperspective float4 UVAndScreenPos : TEXCOORD0, float4 SvPosition :
         }
         float strength = clamp(P[34].z / kMipFactorPerStrength, 0.0, 4.0);
         visibility = saturate(1.0 - (1.0 - sum / max(weight, 1e-4)) * strength);
+        if (st.multiBounce)
+            visibility = MultiBounce(visibility);
     }
 
     // The original's last steps: distance fade, then the post process volume's power and

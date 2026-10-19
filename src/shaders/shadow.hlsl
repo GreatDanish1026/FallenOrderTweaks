@@ -68,7 +68,8 @@ float ConvertFromDeviceZ(float z) { return z * V[57].x + V[57].y + 1.0 / (z * V[
 // (the game ships no distance fields), to code = 1000 + sunSize * 100 + contact:
 //   sunSize 0..49: apparent sun diameter in 0.1 degree steps (the real sun: 5)
 //   contact 0..99: contact shadow length in 2 cm steps (0 = off)
-// Any other value (the game's 0 or 1) means the game's own shadows.
+// Any other value (the game's 0 or 1) means the game's own shadows. Digits above these four
+// belong to GTAO (src/shaders/gtao.hlsl).
 struct Settings
 {
     bool on;
@@ -79,7 +80,7 @@ struct Settings
 Settings DecodeSettings()
 {
     Settings st;
-    uint code = asuint(V[166].x);
+    uint code = asuint(V[166].x) % 10000;
     st.on = code >= 1000 && code < 6000;
     uint p = st.on ? code - 1000 : 0;
     st.tanHalfSun = tan(radians((p / 100) * 0.1) * 0.5);

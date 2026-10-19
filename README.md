@@ -16,8 +16,8 @@ behaviour), and hovering it explains it and shows the game's value.
   **soft sun shadows** that soften with distance from what casts them, **contact shadows**
   where objects meet surfaces, and smoother character shadows.
 - **Lighting**: ambient occlusion with more of the game's levels or **GTAO** in their place
-  (deeper shading in corners and creases, none on open surfaces, no dark halos; strength and
-  radius settings), better reflections, finer volumetric fog, light shafts, bloom, smoke and
+  (deeper shading in corners and creases, none on open surfaces, no dark halos; strength,
+  radius, quality and an approximate multi-bounce), better reflections, finer volumetric fog, light shafts, bloom, smoke and
   glass lighting, and skin scattering.
 - **Advanced**: every console variable the settings control, the game's value and the current
   one, and a reset for everything.

@@ -570,10 +570,15 @@ void ApplyTexturePool() {
 enum AoChoice : int { kAoGame = 0, kAoMore = 1, kAoMax = 2, kAoGtao = 3 };
 const char* const kAoLabels[] = {"Game", "More levels", "Max levels", "GTAO"};
 
+const char* const kGtaoQualityLabels[] = {"High", "Ultra", "Max"};  // 4x8, 6x12, 8x16 samples
+const char* const kOffOn[] = {"Off", "On"};
+
 struct AoSettings {
     int choice = kAoGtao;
     int radiusPercent = 100;    // r.AmbientOcclusionRadiusScale x 100
     int strengthPercent = 100;  // carried to the shader in r.AmbientOcclusionMipLevelFactor
+    int quality = 0;            // kGtaoQualityLabels; carried in the settings code (below)
+    int multiBounce = 0;        // 0/1; carried in the settings code
 };
 AoSettings g_ao;
 // The GTAO shader reads strength as r.AmbientOcclusionMipLevelFactor / 0.5 (the cvar's
@@ -586,6 +591,8 @@ void SaveAo() {
     reshade::set_config_value(nullptr, kConfigSection, "AmbientOcclusion", g_ao.choice);
     reshade::set_config_value(nullptr, kConfigSection, "GtaoRadiusPercent", g_ao.radiusPercent);
     reshade::set_config_value(nullptr, kConfigSection, "GtaoStrengthPercent", g_ao.strengthPercent);
+    reshade::set_config_value(nullptr, kConfigSection, "GtaoQuality", g_ao.quality);
+    reshade::set_config_value(nullptr, kConfigSection, "GtaoMultiBounce", g_ao.multiBounce);
 }
 
 void InitAo() {
@@ -599,11 +606,15 @@ void InitAo() {
     }
     reshade::get_config_value(nullptr, kConfigSection, "GtaoRadiusPercent", g_ao.radiusPercent);
     reshade::get_config_value(nullptr, kConfigSection, "GtaoStrengthPercent", g_ao.strengthPercent);
+    reshade::get_config_value(nullptr, kConfigSection, "GtaoQuality", g_ao.quality);
+    reshade::get_config_value(nullptr, kConfigSection, "GtaoMultiBounce", g_ao.multiBounce);
+    g_ao.quality = std::clamp(g_ao.quality, 0, static_cast<int>(std::size(kGtaoQualityLabels)) - 1);
+    g_ao.multiBounce = std::clamp(g_ao.multiBounce, 0, 1);
     g_ao.choice = std::clamp(g_ao.choice, 0, static_cast<int>(kAoGtao));
     g_ao.radiusPercent = std::clamp(g_ao.radiusPercent, 50, 200);
     g_ao.strengthPercent = std::clamp(g_ao.strengthPercent, 25, 300);
-    Log("ambient occlusion: %s, GTAO radius %d %%, strength %d %%", kAoLabels[g_ao.choice], g_ao.radiusPercent,
-        g_ao.strengthPercent);
+    Log("ambient occlusion: %s, GTAO radius %d %%, strength %d %%, quality %s, multi-bounce %s", kAoLabels[g_ao.choice],
+        g_ao.radiusPercent, g_ao.strengthPercent, kGtaoQualityLabels[g_ao.quality], kOffOn[g_ao.multiBounce]);
 }
 
 void ApplyAo() {
@@ -617,10 +628,7 @@ void ApplyAo() {
 // ---------------------------------------------------------------- sun shadows
 
 // Soft (PCSS) and contact shadows for the sun, in the rebuilt shadow projection pass
-// (src/shaders/shadow.hlsl). Its settings ride in r.AOSpecularOcclusionMode, which reaches
-// every shader as View.DistanceFieldAOSpecularOcclusionMode (cb1[166].x) and otherwise only
-// matters for distance field AO, which the game can't use (it ships no distance fields):
-// code = 1000 + sun size in 0.1 degree steps * 100 + contact length in 2 cm steps.
+// (src/shaders/shadow.hlsl).
 struct SunSize {
     const char* label;
     int tenths;  // apparent diameter, 0.1 degree steps
@@ -653,9 +661,25 @@ void InitShadows() {
     Log("sun shadows: soft %s, contact %s", kSunSizes[g_shadows.sun].label, kContactLengths[g_shadows.contact].label);
 }
 
-void ApplyShadows() {
-    int code = 1000 + kSunSizes[g_shadows.sun].tenths * 100 + kContactLengths[g_shadows.contact].steps;
-    Drive(L"r.AOSpecularOcclusionMode", ShadowsOn(), static_cast<float>(code));
+// ---------------------------------------------------------------- settings code
+
+// Settings for the rebuilt shaders ride in r.AOSpecularOcclusionMode, which reaches every
+// shader as View.DistanceFieldAOSpecularOcclusionMode (cb1[166].x) and otherwise only matters
+// for distance field AO, which the game can't use (it ships no distance fields):
+//   shadows (lowest four digits): 1000 + sun size in 0.1 degree steps * 100 + contact length
+//                                 in 2 cm steps; 0 = the game's shadows
+//   GTAO: quality * 10000 + multi-bounce * 100000
+// With everything at the shaders' defaults it's left to the game (its 0 or 1 means the same).
+int SettingsCode() {
+    int code = 0;
+    if (ShadowsOn()) code += 1000 + kSunSizes[g_shadows.sun].tenths * 100 + kContactLengths[g_shadows.contact].steps;
+    if (GtaoOn()) code += g_ao.quality * 10000 + g_ao.multiBounce * 100000;
+    return code;
+}
+
+void ApplySettingsCode() {
+    int code = SettingsCode();
+    Drive(L"r.AOSpecularOcclusionMode", code != 0, static_cast<float>(code));
 }
 
 // ---------------------------------------------------------------- loading and applying
@@ -695,7 +719,7 @@ void ApplySettings() {
     ApplyTexturePool();
     for (RowList* list : kAllRows) ApplyRows(*list);
     ApplyAo();
-    ApplyShadows();
+    ApplySettingsCode();
 }
 
 // ---------------------------------------------------------------- shader replacement
@@ -883,8 +907,8 @@ void SettingRow(const char* name, const char* help, const wchar_t* cvar, bool su
 }
 
 bool ComboRow(const char* id, const char* name, const char* help, const wchar_t* cvar, int* choice,
-              const char* const* labels, int count) {
-    SettingRow(name, help, cvar);
+              const char* const* labels, int count, bool sub = false) {
+    SettingRow(name, help, cvar, sub);
     bool changed = ImGui::Combo(id, choice, labels, count);
     Help(help, cvar);
     return changed;
@@ -1060,6 +1084,17 @@ void DrawLighting() {
                                    "How far GTAO looks for occluders, relative to the game's AO radius. Larger reaches "
                                    "further from corners; smaller keeps it to contact shading.",
                                    L"r.AmbientOcclusionRadiusScale", &g_ao.radiusPercent, 50, 200, "%d %%");
+            aoChanged |= ComboRow("##quality", "Quality",
+                                  "Samples per pixel: more give smoother, steadier shading with less noise, at more "
+                                  "GPU cost.\nHigh: 4 directions x 8 steps. Ultra: 6 x 12 (about 2x). Max: 8 x 16 "
+                                  "(about 4x).",
+                                  nullptr, &g_ao.quality, kGtaoQualityLabels, static_cast<int>(std::size(kGtaoQualityLabels)),
+                                  true);
+            aoChanged |= ComboRow("##bounce", "Multi-bounce",
+                                  "Light bouncing between surfaces brightens occluded areas: broad, shallow shading "
+                                  "lifts while deep contact shading stays. An approximation: the AO pass doesn't see "
+                                  "surface colours, so a typical surface brightness is assumed.",
+                                  nullptr, &g_ao.multiBounce, kOffOn, 2, true);
         }
         rowsChanged |= DrawRows(g_lightingRows);
         ImGui::EndTable();

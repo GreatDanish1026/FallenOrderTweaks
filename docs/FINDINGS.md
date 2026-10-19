@@ -241,3 +241,17 @@ view-space normal (cb1[8..10]) by the normal scale and re-projected, then 16 Poi
 (the shader's 64-entry table, entries 15-30, scaled by 1 / shadow map height) summing
 `clamp(|v|, 0.15, 5) + 0.25`, where `v = delta * extinction + normalScale` (clamped at 0 unless
 delta * extinction > 0), giving `1 - sum * 0.0125`. Rebuilt in 0.6.1 (`USE_TRANSMISSION`).
+
+### GTAO upgrades (0.8.0)
+
+- Specular occlusion: the reflection environment pass (`FReflectionEnvironmentSkyLightingPS`,
+  33 permutations) already derives specular occlusion from the AO buffer (it unpacks AO by
+  256/255, squares it and combines it with N.V, blended by roughness), so GTAO's AO improves
+  reflections in crevices by itself. A true cone-based GTAO specular occlusion would need
+  bent normals in another buffer and all 33 permutations replaced, so it isn't done.
+- Multi-bounce: the AO pass doesn't bind GBuffer C (albedo), so Jimenez et al.'s fit uses an
+  assumed albedo of 0.5.
+- Settings: GTAO's quality (High 4x8, Ultra 6x12, Max 8x16 slices x steps) and multi-bounce
+  ride in the same settings code as the sun shadows (`r.AOSpecularOcclusionMode` ->
+  cb1[166].x), as `quality * 10000 + multiBounce * 100000`; the shadow shader reads only the
+  lowest four digits.
