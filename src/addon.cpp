@@ -577,8 +577,8 @@ struct AoSettings {
     int choice = kAoGtao;
     int radiusPercent = 100;    // r.AmbientOcclusionRadiusScale x 100
     int strengthPercent = 100;  // carried to the shader in r.AmbientOcclusionMipLevelFactor
-    int quality = 0;            // kGtaoQualityLabels; carried in the settings code (below)
-    int multiBounce = 0;        // 0/1; carried in the settings code
+    int quality = 1;            // kGtaoQualityLabels (Ultra); carried in the settings code (below)
+    int multiBounce = 1;        // 0/1; carried in the settings code
 };
 AoSettings g_ao;
 // The GTAO shader reads strength as r.AmbientOcclusionMipLevelFactor / 0.5 (the cvar's
