@@ -10,6 +10,9 @@
 //              without this it always runs DLAA.
 //   Detail     texture streaming pool by video memory, 16x anisotropic filtering, sharper and
 //              further shadows, further view distance, and top-quality screen space reflections
+//   Experimental  engine features to try, each shown next to the game's own value: distance
+//              field AO and shadows, PCSS soft shadows, SSAO levels, volumetric fog, capsule
+//              shadows, contact shadows and skin scattering (all off by default)
 //
 // What it records, next to the game executable:
 //   FallenOrderTweaks.log  the console manager scan, the layout check, and every value it
@@ -234,11 +237,18 @@ void* Resolve(Override& o) {
     if (!o.var) {
         o.missing = true;
         Log("override: %ls is not a cvar in this build", o.cvar);
-    } else if (!o.haveGame) {
-        o.haveGame = cvars::GetFloat(o.var, o.game);
-        o.gameFlags = cvars::Flags(o.var);
     }
     return o.var;
+}
+
+// The game's value: what it had when we took the cvar over, or else what it has now. False
+// if the cvar doesn't exist (or the manager isn't ready).
+bool GameValue(Override& o, float& out) {
+    if (o.active && o.haveGame) {
+        out = o.game;
+        return true;
+    }
+    return g_manager && Resolve(o) && cvars::GetFloat(o.var, out);
 }
 
 std::wstring Text(float v) {
@@ -264,7 +274,10 @@ void ApplyOverrides() {
         float before = 0;
         cvars::GetFloat(o.var, before);
         if (o.wanted) {
-            if (!o.active) o.gameFlags = cvars::Flags(o.var);  // what to hand back later
+            if (!o.active) {  // what to hand back later
+                o.haveGame = cvars::GetFloat(o.var, o.game);
+                o.gameFlags = cvars::Flags(o.var);
+            }
             bool ok = cvars::Set(o.var, Text(o.value).c_str(), cvars::kSetByConsole);
             float after = 0;
             cvars::GetFloat(o.var, after);
@@ -428,6 +441,100 @@ void ApplyDetail() {
     Drive(L"r.SSR.Quality", g_detail.on && g_detail.reflections, 4.0f);
 }
 
+// ---------------------------------------------------------------- experimental
+
+// Engine features UE 4.21 ships but the game may not use: tried in game before they become
+// real settings. Each row's choice 0 is the game's own; choice n forces values[n - 1].
+struct CvarValue {
+    const wchar_t* cvar;
+    float value;
+};
+
+struct Experiment {
+    const char* key;   // ReShade.ini
+    const char* name;
+    const char* help;
+    const wchar_t* shown;  // the cvar whose game value the row shows
+    std::vector<const char*> labels;
+    std::vector<std::vector<CvarValue>> values;
+    int choice = 0;
+};
+
+std::vector<Experiment> g_experiments;
+bool g_experimentsInitialised = false;
+
+void DefineExperiments() {
+    g_experiments = {
+        {"ExpDistanceFieldAO", "Distance field AO",
+         "Ambient occlusion traced against the level's distance fields: large-scale shading under overhangs and "
+         "in rooms, lit by the sky. Only works if the game shipped distance field data (see above).\n"
+         "Max: on, at top quality and full resolution.",
+         L"r.DistanceFieldAO", {"Game", "Max"},
+         {{{L"r.DistanceFieldAO", 1}, {L"r.AOQuality", 2}, {L"r.DFFullResolution", 1}}}},
+        {"ExpDistanceFieldShadows", "Distance field shadows",
+         "Soft shadows traced against distance fields, for lights the level designers set up for them (often "
+         "distant sun shadows). Needs distance field data.\nMax: on, at top quality.",
+         L"r.DistanceFieldShadowing", {"Game", "Max"},
+         {{{L"r.DistanceFieldShadowing", 1}, {L"r.DFShadowQuality", 3}}}},
+        {"ExpSoftShadows", "Soft sun shadows (PCSS)",
+         "UE 4.21's experimental PCSS: shadows soften the farther they fall from what casts them.",
+         L"r.Shadow.FilterMethod", {"Game", "On"}, {{{L"r.Shadow.FilterMethod", 1}}}},
+        {"ExpAmbientOcclusion", "Ambient occlusion",
+         "The game's screen space ambient occlusion: more levels give deeper, smoother shading in corners and "
+         "creases.\nHigh: 3 levels. Max: 4.",
+         L"r.AmbientOcclusionLevels", {"Game", "High", "Max"},
+         {{{L"r.AmbientOcclusionLevels", 3}}, {{L"r.AmbientOcclusionLevels", 4}}}},
+        {"ExpVolumetricFog", "Volumetric fog",
+         "Detail of the volumetric fog and the light shafts through it.\nHigh: 6 px cells (Epic uses 8). Ultra: "
+         "4 px cells and more depth slices, about 4x the fog work.",
+         L"r.VolumetricFog.GridPixelSize", {"Game", "High", "Ultra"},
+         {{{L"r.VolumetricFog.GridPixelSize", 6}},
+          {{L"r.VolumetricFog.GridPixelSize", 4}, {L"r.VolumetricFog.GridSizeZ", 192}}}},
+        {"ExpCapsuleShadows", "Character soft shadows",
+         "Capsule shadows: soft shadows characters cast from indirect light. Full resolution: computed at full "
+         "screen resolution instead of half, so they're smoother.",
+         L"r.CapsuleShadowsFullResolution", {"Game", "Full resolution"},
+         {{{L"r.CapsuleShadows", 1}, {L"r.CapsuleShadowsFullResolution", 1}}}},
+        {"ExpContactShadows", "Contact shadows",
+         "Short screen space shadows where objects touch surfaces, for lights that have a contact shadow length.",
+         L"r.ContactShadows", {"Game", "On"}, {{{L"r.ContactShadows", 1}}}},
+        {"ExpSkin", "Skin scattering",
+         "Light scattering under the skin of faces and hands.\nHigh: the high quality, full resolution version.",
+         L"r.SSS.Quality", {"Game", "High"}, {{{L"r.SSS.Quality", 1}, {L"r.SSS.HalfRes", 0}}}},
+    };
+}
+
+void SaveExperiments() {
+    for (const Experiment& e : g_experiments) reshade::set_config_value(nullptr, kConfigSection, e.key, e.choice);
+}
+
+void InitExperiments() {
+    g_experimentsInitialised = true;
+    std::string line;
+    for (Experiment& e : g_experiments) {
+        reshade::get_config_value(nullptr, kConfigSection, e.key, e.choice);
+        e.choice = std::clamp(e.choice, 0, static_cast<int>(e.labels.size()) - 1);
+        line += std::string(line.empty() ? "" : ", ") + e.name + " " + e.labels[e.choice];
+    }
+    Log("experimental: %s", line.c_str());
+}
+
+void ApplyExperiments() {
+    if (!g_experimentsInitialised) InitExperiments();
+    for (const Experiment& e : g_experiments) {
+        // Every cvar any choice of this row touches: forced if the current choice lists it.
+        for (const std::vector<CvarValue>& set : e.values)
+            for (const CvarValue& cv : set) {
+                bool want = false;
+                float value = 0;
+                if (e.choice > 0)
+                    for (const CvarValue& c : e.values[e.choice - 1])
+                        if (wcscmp(c.cvar, cv.cvar) == 0) want = true, value = c.value;
+                Drive(cv.cvar, want, value);
+            }
+    }
+}
+
 // ---------------------------------------------------------------- events
 
 uint64_t g_frames = 0;
@@ -473,6 +580,7 @@ void OnPresent(command_queue*, swapchain* sc, const rect*, const rect*, uint32_t
     if (!FindManager()) return;
     ApplyUpscale();
     ApplyDetail();
+    ApplyExperiments();
     ApplyOverrides();
     if (g_frames % 60 == 0) CheckOverrides();
 }
@@ -627,6 +735,48 @@ void DrawDetail() {
     if (changed) SaveDetail();
 }
 
+void DrawExperimental() {
+    Wrapped("Engine features to try. Each row shows the game's own value: if a setting changes nothing you can "
+            "see, the game probably doesn't use that feature. Saved like the other tabs.");
+    float df = 0;
+    bool haveDf = GameValue(*FindOverride(L"r.GenerateMeshDistanceFields"), df);
+    if (!haveDf)
+        ImGui::TextDisabled("Distance field data: unknown");
+    else if (df != 0)
+        ImGui::Text("Distance field data: shipped (r.GenerateMeshDistanceFields 1)");
+    else
+        ImGui::TextColored(kWarn, "Distance field data: not shipped, so the distance field rows do nothing");
+    ImGui::Spacing();
+
+    bool changed = false;
+    if (ImGui::BeginTable("##exp", 3, ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed,
+                                ImGui::CalcTextSize("Soft sun shadows (PCSS)").x + ImGui::GetFontSize());
+        ImGui::TableSetupColumn("control", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 11);
+        ImGui::TableSetupColumn("game", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 6);
+        for (Experiment& e : g_experiments) {
+            ImGui::PushID(e.key);
+            SettingRow(e.name, e.help);
+            changed |= ImGui::Combo("##c", &e.choice, e.labels.data(), static_cast<int>(e.labels.size()));
+            Help(e.help);
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            float game = 0;
+            if (GameValue(*FindOverride(e.shown), game))
+                ImGui::TextDisabled("game: %g", game);
+            else
+                ImGui::TextDisabled("game: -");
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    if (ResetButton()) {
+        for (Experiment& e : g_experiments) e.choice = 0;
+        changed = true;
+    }
+    if (changed) SaveExperiments();
+}
+
 void DrawAdvanced() {
     Wrapped("The console variables these settings control: the game's own value, and what it is now.");
     ImGui::TextDisabled("Status: %s", g_status.c_str());
@@ -639,10 +789,11 @@ void DrawAdvanced() {
             ImGui::TableNextColumn();
             ImGui::Text("%ls", o.cvar);
             ImGui::TableNextColumn();
+            float game = 0;
             if (o.missing)
                 ImGui::TextDisabled("not in this build");
-            else if (o.haveGame)
-                ImGui::Text("%g", o.game);
+            else if (GameValue(o, game))
+                ImGui::Text("%g", game);
             else
                 ImGui::TextDisabled("-");
             ImGui::TableNextColumn();
@@ -682,6 +833,10 @@ void DrawOverlay(effect_runtime*) {
         DrawDetail();
         ImGui::EndTabItem();
     }
+    if (ImGui::BeginTabItem("Experimental")) {
+        DrawExperimental();
+        ImGui::EndTabItem();
+    }
     if (ImGui::BeginTabItem("Advanced")) {
         DrawAdvanced();
         ImGui::EndTabItem();
@@ -692,6 +847,7 @@ void DrawOverlay(effect_runtime*) {
 void Install() {
     OpenLog();
     LogGameInfo();
+    DefineExperiments();
     reshade::register_event<reshade::addon_event::init_device>(&OnInitDevice);
     reshade::register_event<reshade::addon_event::present>(&OnPresent);
     reshade::register_overlay(FOT_PRODUCT, &DrawOverlay);
