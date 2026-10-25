@@ -255,3 +255,16 @@ delta * extinction > 0), giving `1 - sum * 0.0125`. Rebuilt in 0.6.1 (`USE_TRANS
   ride in the same settings code as the sun shadows (`r.AOSpecularOcclusionMode` ->
   cb1[166].x), as `quality * 10000 + multiBounce * 100000`; the shadow shader reads only the
   lowest four digits.
+
+### Camera effects (1.1.0)
+
+The game's menu switches are Respawn cvars: `r.EnableCameraAndMeshMotionBlur` (its help says
+velocity overrides can still blur with it off), `r.EnableFilmGrain` (0 off, 1 on, 2 high) and
+`r.EnableChromaticAberration`. The Camera tab forces, on top of those: motion blur
+`r.MotionBlurQuality 0`; film grain `r.EnableFilmGrain 0`; chromatic aberration
+`r.EnableChromaticAberration 0` + `r.SceneColorFringe.Max 0` (clamps post-process volumes);
+depth of field `r.DepthOfFieldQuality 0` (or the High quality accumulator); vignette
+`r.Tonemapper.Quality 1` (0 basic, 1 + film contrast, 2 + vignette, 3 + shadow tint, 4 + grain,
+5 + grain jitter); lens flares `r.LensFlareQuality 0`; camera shake `rs.CameraShakeMultiplier`
+0.5 / 0. Vignette changes the tonemapper permutation, which Luma has to recognise; in-game
+test pending.

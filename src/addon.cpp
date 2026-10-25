@@ -348,20 +348,44 @@ struct RowList {
 };
 
 RowList g_imageRows{"image"};
+RowList g_cameraRows{"camera"};
 RowList g_detailRows{"detail"};
 RowList g_shadowRows{"shadows"};
 RowList g_characterShadowRows{"character shadows"};
 RowList g_lightingRows{"lighting"};
-RowList* const kAllRows[] = {&g_imageRows, &g_detailRows, &g_shadowRows, &g_characterShadowRows, &g_lightingRows};
+RowList* const kAllRows[] = {&g_imageRows, &g_cameraRows, &g_detailRows, &g_shadowRows, &g_characterShadowRows, &g_lightingRows};
 
 // Tried and dropped (docs/FINDINGS.md, "Experimental results"): distance field AO and shadows
 // (no distance fields shipped), the engine's PCSS and contact shadows (no visible change).
 void DefineRows() {
-    g_imageRows.rows = {
-        {"FxDepthOfField", "Cutscene depth of field",
-         "Quality of the background blur in cutscenes and photo mode. High: the higher quality accumulator, "
-         "smoother bokeh with less flicker.",
-         L"r.DOF.Gather.AccumulatorQuality", {"Game", "High"}, {{{L"r.DOF.Gather.AccumulatorQuality", 1}}}},
+    // Camera effects are a matter of taste, so they stay on Game unless picked (depth of field
+    // keeps its earlier default, High quality).
+    g_cameraRows.rows = {
+        {"CamMotionBlur", "Motion blur",
+         "Blur from camera and object movement. Game: follows the game's menu, whose Off still leaves some "
+         "object blur. Off: no motion blur at all.",
+         L"r.MotionBlurQuality", {"Game", "Off"}, {{{L"r.MotionBlurQuality", 0}}}, 0},
+        {"CamFilmGrain", "Film grain", "Game: follows the game's menu. Off: no film grain.", L"r.EnableFilmGrain",
+         {"Game", "Off"}, {{{L"r.EnableFilmGrain", 0}}}, 0},
+        {"CamChromaticAberration", "Chromatic aberration",
+         "Colour fringes towards the edges of the screen. Game: follows the game's menu. Off: none, also where a "
+         "scene adds its own.",
+         L"r.EnableChromaticAberration", {"Game", "Off"},
+         {{{L"r.EnableChromaticAberration", 0}, {L"r.SceneColorFringe.Max", 0}}}, 0},
+        {"FxDepthOfField", "Depth of field",
+         "Background blur in cutscenes, menus and photo mode. High quality: the higher quality accumulator, "
+         "smoother bokeh with less flicker. Off: no depth of field anywhere.",
+         L"r.DepthOfFieldQuality", {"Game", "High quality", "Off"},
+         {{{L"r.DOF.Gather.AccumulatorQuality", 1}}, {{L"r.DepthOfFieldQuality", 0}}}},
+        {"CamVignette", "Vignette",
+         "Darkening towards the corners of the screen. Off: the game's tonemapper without vignette, which also "
+         "drops its shadow tint and grain.",
+         L"r.Tonemapper.Quality", {"Game", "Off"}, {{{L"r.Tonemapper.Quality", 1}}}, 0},
+        {"CamLensFlares", "Lens flares", "Flares from bright lights such as the sun. Off: none.", L"r.LensFlareQuality",
+         {"Game", "Off"}, {{{L"r.LensFlareQuality", 0}}}, 0},
+        {"CamShake", "Camera shake", "Shaking of the camera from hits, explosions and landings.\nReduced: half. Off: none.",
+         L"rs.CameraShakeMultiplier", {"Game", "Reduced", "Off"},
+         {{{L"rs.CameraShakeMultiplier", 0.5f}}, {{L"rs.CameraShakeMultiplier", 0}}}, 0},
     };
     g_detailRows.rows = {
         {"DetailAnisotropy16", "Texture filtering",
@@ -880,7 +904,7 @@ void Help(const char* text, const wchar_t* cvar = nullptr) {
     ImGui::EndTooltip();
 }
 
-const char* const kWidestNames[] = {"Rough surface reflections", "Smoke and glass lighting", "Cutscene depth of field",
+const char* const kWidestNames[] = {"Rough surface reflections", "Smoke and glass lighting", "Chromatic aberration",
                                     "Character soft shadows"};
 
 bool BeginSettings(const char* id) {
@@ -956,6 +980,8 @@ void ResetImage() {
     ResetRows(g_imageRows);
 }
 
+void ResetCamera() { ResetRows(g_cameraRows); }
+
 void ResetDetail() {
     g_texturePool = kPoolAuto;
     SaveTexturePool();
@@ -1007,11 +1033,19 @@ void DrawImage() {
         Note(line);
     }
     if (!LumaLoaded()) Note("Luma isn't loaded, so the game's own TAA upscales instead of DLSS.", true);
-    ImGui::Spacing();
-    Note("Film grain, motion blur and chromatic aberration are in the game's own graphics menu.");
     if (ResetButton()) ResetImage();
     if (upscaleChanged) SaveUpscale();
     if (rowsChanged) SaveRows(g_imageRows);
+}
+
+void DrawCamera() {
+    bool rowsChanged = false;
+    if (BeginSettings("##camera")) {
+        rowsChanged |= DrawRows(g_cameraRows);
+        ImGui::EndTable();
+    }
+    if (ResetButton()) ResetCamera();
+    if (rowsChanged) SaveRows(g_cameraRows);
 }
 
 void DrawDetail() {
@@ -1144,6 +1178,7 @@ void DrawAdvanced() {
     }
     if (ResetButton("Reset all settings")) {
         ResetImage();
+        ResetCamera();
         ResetDetail();
         ResetShadows();
         ResetLighting();
@@ -1167,7 +1202,7 @@ void DrawOverlay(effect_runtime*) {
         const char* name;
         void (*draw)();
     };
-    const Tab tabs[] = {{"Image", DrawImage}, {"Detail", DrawDetail}, {"Shadows", DrawShadows},
+    const Tab tabs[] = {{"Image", DrawImage}, {"Camera", DrawCamera}, {"Detail", DrawDetail}, {"Shadows", DrawShadows},
                         {"Lighting", DrawLighting}, {"Advanced", DrawAdvanced}};
     for (const Tab& t : tabs)
         if (ImGui::BeginTabItem(t.name)) {

@@ -8,8 +8,10 @@ behaviour), and hovering it explains it and shows the game's value.
 
 - **Image**: the **DLSS mode** for [Luma](https://github.com/Filoppi/Luma-Framework) (DLAA,
   Quality, Balanced, Performance or Ultra Performance, changed live: Luma replaces the game's
-  TAA with DLSS but follows the game's render resolution, which this sets), texture
-  sharpness to match the DLSS mode, and cutscene depth of field.
+  TAA with DLSS but follows the game's render resolution, which this sets) and texture
+  sharpness to match the DLSS mode.
+- **Camera**: turn off motion blur, film grain, chromatic aberration, depth of field (or make
+  it higher quality), vignette, lens flares and camera shake.
 - **Detail**: texture memory sized to your video card, 16x texture filtering, further view,
   grass and foliage distance with less pop-in, and more detailed characters and terrain.
 - **Shadows**: sharper (4096) and further shadows, more cascades with softer blending,
@@ -41,7 +43,6 @@ Uninstall: delete `FallenOrderTweaks.addon64`. Values go back to the game's at t
 - If the game build differs from the one analysed, the add-on checks the console variable
   layout first and changes nothing if it doesn't match (the overlay says so).
 - It writes `FallenOrderTweaks.log` next to the game executable.
-- Film grain, motion blur and chromatic aberration are in the game's own menu.
 
 ## Building
 
