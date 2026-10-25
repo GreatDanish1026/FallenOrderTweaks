@@ -265,6 +265,6 @@ velocity overrides can still blur with it off), `r.EnableFilmGrain` (0 off, 1 on
 `r.EnableChromaticAberration 0` + `r.SceneColorFringe.Max 0` (clamps post-process volumes);
 depth of field `r.DepthOfFieldQuality 0` (or the High quality accumulator); vignette
 `r.Tonemapper.Quality 1` (0 basic, 1 + film contrast, 2 + vignette, 3 + shadow tint, 4 + grain,
-5 + grain jitter); lens flares `r.LensFlareQuality 0`; camera shake `rs.CameraShakeMultiplier`
-0.5 / 0. Vignette changes the tonemapper permutation, which Luma has to recognise; in-game
-test pending.
+5 + grain jitter); lens flares `r.LensFlareQuality 0`. Vignette changes the tonemapper permutation; HDR with
+Luma still looks right with it off (tested 2026-10-25). `rs.CameraShakeMultiplier` exists but
+couldn't be tested, so it isn't offered.

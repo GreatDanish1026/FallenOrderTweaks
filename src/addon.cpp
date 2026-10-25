@@ -383,9 +383,6 @@ void DefineRows() {
          L"r.Tonemapper.Quality", {"Game", "Off"}, {{{L"r.Tonemapper.Quality", 1}}}, 0},
         {"CamLensFlares", "Lens flares", "Flares from bright lights such as the sun. Off: none.", L"r.LensFlareQuality",
          {"Game", "Off"}, {{{L"r.LensFlareQuality", 0}}}, 0},
-        {"CamShake", "Camera shake", "Shaking of the camera from hits, explosions and landings.\nReduced: half. Off: none.",
-         L"rs.CameraShakeMultiplier", {"Game", "Reduced", "Off"},
-         {{{L"rs.CameraShakeMultiplier", 0.5f}}, {{L"rs.CameraShakeMultiplier", 0}}}, 0},
     };
     g_detailRows.rows = {
         {"DetailAnisotropy16", "Texture filtering",

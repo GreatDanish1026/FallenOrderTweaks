@@ -11,7 +11,7 @@ behaviour), and hovering it explains it and shows the game's value.
   TAA with DLSS but follows the game's render resolution, which this sets) and texture
   sharpness to match the DLSS mode.
 - **Camera**: turn off motion blur, film grain, chromatic aberration, depth of field (or make
-  it higher quality), vignette, lens flares and camera shake.
+  it higher quality), vignette and lens flares.
 - **Detail**: texture memory sized to your video card, 16x texture filtering, further view,
   grass and foliage distance with less pop-in, and more detailed characters and terrain.
 - **Shadows**: sharper (4096) and further shadows, more cascades with softer blending,
