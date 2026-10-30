@@ -29,7 +29,7 @@ $cmd = @(
     ("cl /nologo /std:c++17 /O2 /EHsc /MT /W3 /D_CRT_SECURE_NO_WARNINGS /DNOMINMAX " +
      "/I `"$root\third_party\imgui`" /I `"$root\third_party\reshade\include`" " +
      "/Fo`"$obj\\`" `"$root\src\addon.cpp`" `"$obj\version.res`" " +
-     "/link /DLL /OUT:`"$addon`" /PDB:`"$obj\$name.pdb`" /DEBUG")
+     "/link /DLL user32.lib /OUT:`"$addon`" /PDB:`"$obj\$name.pdb`" /DEBUG")
 ) -join " && "
 cmd /c $cmd
 if ($LASTEXITCODE) { throw "add-on build failed" }

@@ -38,6 +38,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -743,6 +744,286 @@ void ApplySettings() {
     ApplySettingsCode();
 }
 
+void SaveSettings() {
+    for (RowList* list : kAllRows) SaveRows(*list);
+    SaveTexturePool();
+    SaveAo();
+    SaveShadows();
+}
+
+// ---------------------------------------------------------------- presets
+//
+// A preset sets the quality settings (key -> choice); a key a preset doesn't list takes the
+// Game preset's value (0 unless Game lists it). The DLSS mode, texture sharpness and the Camera
+// tab (taste) are in no preset and left alone; so are GTAO strength and radius. The preset shown
+// is derived from the settings, "Custom" when none matches. Ultra+ is the add-on's defaults;
+// Cinematic takes every setting to its top choice except the sun's size (a matter of taste).
+// Costs aren't measured yet.
+
+struct QualityPreset {
+    const char* label;
+    const char* cost;  // shown next to the label in the picker ("" = not measured)
+    const char* tip;
+    std::vector<std::pair<const char*, int>> values;
+};
+
+const QualityPreset kPresets[] = {
+    // GTAO quality and multi-bounce only matter with GTAO on; Game lists them at their defaults.
+    {"Game", "", "The game's own settings: every detail, shadow and lighting setting at Game.",
+     {{"GtaoQuality", 1}, {"GtaoMultiBounce", 1}}},
+    {"Ultra+", "",
+     "The add-on's defaults: texture memory sized to your card, 16x filtering, further view and\n"
+     "grass distance, detailed characters and terrain, 4096 shadows with 4 soft cascades, soft\n"
+     "and contact sun shadows, GTAO (Ultra, multi-bounce), better reflections, finer fog, light\n"
+     "shafts, bloom, smoke and glass lighting, and skin scattering.",
+     {{"TexturePool", 1}, {"DetailAnisotropy16", 1}, {"DetailViewDistance", 1}, {"DetailGrassDistance", 1},
+      {"DetailFoliageDensity", 1}, {"DetailCharacterLod", 1}, {"DetailTerrainLod", 1}, {"DetailShadows", 1},
+      {"DetailShadowCascades", 1}, {"DetailCascadeBlend", 1}, {"ShadowSunSize", 1}, {"ShadowContact", 1},
+      {"ExpCapsuleShadows", 1}, {"AmbientOcclusion", 3}, {"GtaoQuality", 1}, {"GtaoMultiBounce", 1},
+      {"DetailReflections", 1}, {"FxReflectionRoughness", 1}, {"ExpVolumetricFog", 1}, {"FxLightShafts", 1},
+      {"FxBloom", 1}, {"FxTranslucencyLighting", 1}, {"ExpSkin", 1}}},
+    {"Cinematic", "",
+     "Ultra+ with every setting at its top choice: the farthest grass, Ultra shadows (further,\n"
+     "small objects cast shadows) with 5 cascades, medium contact shadows, GTAO at Max quality\n"
+     "and Ultra volumetric fog. Costs the most.",
+     {{"TexturePool", 1}, {"DetailAnisotropy16", 1}, {"DetailViewDistance", 1}, {"DetailGrassDistance", 2},
+      {"DetailFoliageDensity", 1}, {"DetailCharacterLod", 1}, {"DetailTerrainLod", 1}, {"DetailShadows", 2},
+      {"DetailShadowCascades", 2}, {"DetailCascadeBlend", 1}, {"ShadowSunSize", 1}, {"ShadowContact", 2},
+      {"ExpCapsuleShadows", 1}, {"AmbientOcclusion", 3}, {"GtaoQuality", 2}, {"GtaoMultiBounce", 1},
+      {"DetailReflections", 1}, {"FxReflectionRoughness", 1}, {"ExpVolumetricFog", 2}, {"FxLightShafts", 1},
+      {"FxBloom", 1}, {"FxTranslucencyLighting", 1}, {"ExpSkin", 1}}},
+};
+constexpr int kPresetCount = static_cast<int>(std::size(kPresets));
+
+// The choice a preset key stands for: a row's, or one of the settings with their own logic.
+int* PresetChoice(const std::string& key) {
+    if (key == "TexturePool") return &g_texturePool;
+    if (key == "AmbientOcclusion") return &g_ao.choice;
+    if (key == "GtaoQuality") return &g_ao.quality;
+    if (key == "GtaoMultiBounce") return &g_ao.multiBounce;
+    if (key == "ShadowSunSize") return &g_shadows.sun;
+    if (key == "ShadowContact") return &g_shadows.contact;
+    CvarRow* e = FindRow(key.c_str());
+    return e ? &e->choice : nullptr;
+}
+
+std::string ChoiceLabel(const std::string& key, int choice) {
+    if (key == "TexturePool") return "Texture memory Auto";
+    if (key == "AmbientOcclusion") return std::string("Ambient occlusion ") + kAoLabels[choice];
+    if (key == "GtaoQuality") return std::string("GTAO quality ") + kGtaoQualityLabels[choice];
+    if (key == "GtaoMultiBounce") return std::string("GTAO multi-bounce ") + kOffOn[choice];
+    if (key == "ShadowSunSize") return std::string("Soft sun shadows ") + kSunSizes[choice].label;
+    if (key == "ShadowContact") return std::string("Contact shadows ") + kContactLengths[choice].label;
+    CvarRow* e = FindRow(key.c_str());
+    if (!e || choice < 0 || choice >= static_cast<int>(e->labels.size())) return key;
+    return std::string(e->name) + " " + e->labels[choice];
+}
+
+std::set<std::string> PresetKeys() {
+    std::set<std::string> keys;
+    for (const QualityPreset& p : kPresets)
+        for (auto& [key, choice] : p.values) keys.insert(key);
+    return keys;
+}
+
+int PresetValue(const QualityPreset& p, const std::string& key) {
+    for (const QualityPreset* q : {&p, &kPresets[0]})
+        for (auto& [k, choice] : q->values)
+            if (key == k) return choice;
+    return 0;
+}
+
+int CurrentPreset() {
+    std::set<std::string> keys = PresetKeys();
+    for (int i = 0; i < kPresetCount; ++i) {
+        bool match = true;
+        for (const std::string& key : keys)
+            if (int* c = PresetChoice(key); c && *c != PresetValue(kPresets[i], key)) match = false;
+        if (match) return i;
+    }
+    return -1;
+}
+
+void ApplyPreset(int index) {
+    for (const std::string& key : PresetKeys())
+        if (int* c = PresetChoice(key)) *c = PresetValue(kPresets[index], key);
+    SaveSettings();
+    Log("preset: %s", kPresets[index].label);
+}
+
+// ---------------------------------------------------------------- frame time and measuring
+//
+// A measurement runs stages one after another: each sets the preset settings (everything at the
+// Game preset's value except the stage's own choices), settles, then averages the time between
+// presents. "Presets" runs Game and each preset; "each option" runs Game, every choice a preset
+// uses on its own (the GTAO choices with GTAO on), then Game again (to show drift). The settings
+// come back afterwards, unsaved in between.
+
+int64_t g_qpcFreq = 1;
+std::vector<float> g_frameMs;  // recent frames, a ring of kFrameRing
+size_t g_framePos = 0;
+constexpr size_t kFrameRing = 240;
+
+float Mean(const std::vector<float>& v) {
+    if (v.empty()) return 0;
+    double sum = 0;
+    for (float x : v) sum += x;
+    return static_cast<float>(sum / v.size());
+}
+
+struct Stage {
+    std::string label;
+    std::vector<std::pair<std::string, int>> values;
+};
+
+struct Measure {
+    bool running = false;
+    bool perOption = false;
+    ULONGLONG settleMs = 5000, sampleMs = 8000;
+    std::vector<Stage> stages;
+    size_t stage = 0;
+    ULONGLONG stageStart = 0;
+    bool sampling = false;
+    std::vector<float> samples;
+    std::vector<std::pair<std::string, int>> saved;
+    std::vector<float> resultMs;
+    bool done = false;
+    std::string note;
+    std::string summary;
+} g_measure;
+
+void ApplyStage(const Stage& st) {
+    for (const std::string& key : PresetKeys())
+        if (int* c = PresetChoice(key)) *c = PresetValue(kPresets[0], key);
+    for (auto& [key, choice] : st.values)
+        if (int* c = PresetChoice(key)) *c = choice;
+}
+
+void StartMeasure(bool perOption) {
+    g_measure = {};
+    g_measure.running = true;
+    g_measure.perOption = perOption;
+    if (perOption) g_measure.settleMs = 4000, g_measure.sampleMs = 6000;
+    for (const std::string& key : PresetKeys())
+        if (int* c = PresetChoice(key)) g_measure.saved.push_back({key, *c});
+    g_measure.stages.push_back({"Game", {}});
+    if (perOption) {
+        for (const std::string& key : PresetKeys()) {
+            std::set<int> choices;
+            for (int i = 1; i < kPresetCount; ++i)
+                if (int c = PresetValue(kPresets[i], key); c != PresetValue(kPresets[0], key)) choices.insert(c);
+            const bool gtaoKey = key == "GtaoQuality" || key == "GtaoMultiBounce";
+            for (int c : choices) {
+                Stage st{ChoiceLabel(key, c), {{key, c}}};
+                if (gtaoKey) st.label += " (with GTAO)", st.values.push_back({"AmbientOcclusion", kAoGtao});
+                g_measure.stages.push_back(st);
+            }
+        }
+        g_measure.stages.push_back({"Game (again)", {}});
+    } else {
+        for (int i = 1; i < kPresetCount; ++i) {
+            Stage st{kPresets[i].label, {}};
+            for (auto& [key, c] : kPresets[i].values) st.values.push_back({key, c});
+            g_measure.stages.push_back(st);
+        }
+    }
+    g_measure.resultMs.assign(g_measure.stages.size(), 0);
+    g_measure.stageStart = GetTickCount64();
+    ApplyStage(g_measure.stages[0]);
+    Log("measure: started (%s, %zu stages)", perOption ? "each option" : "presets", g_measure.stages.size());
+}
+
+void FinishMeasure(const char* why) {
+    for (auto& [key, choice] : g_measure.saved)
+        if (int* c = PresetChoice(key)) *c = choice;
+    g_measure.running = false;
+    g_measure.note = why;
+    Log("measure: %s", why);
+}
+
+void SummarizeMeasure() {
+    const std::vector<float>& r = g_measure.resultMs;
+    const float base = g_measure.perOption ? (r.front() + r.back()) / 2 : r.front();
+    char line[160];
+    if (!g_measure.perOption) {
+        std::string sum = "Game " + std::to_string(static_cast<int>(1000.0f / r[0] + 0.5f)) + " fps";
+        for (size_t i = 1; i < r.size(); ++i) {
+            snprintf(line, sizeof(line), ", %s %.0f fps (%+.0f%% frame time)", g_measure.stages[i].label.c_str(),
+                     1000.0f / r[i], (r[i] / base - 1) * 100);
+            sum += line;
+        }
+        g_measure.summary = sum;
+        Log("measure: result: %s", sum.c_str());
+        return;
+    }
+    std::vector<size_t> order;  // each option, costliest first
+    for (size_t i = 1; i + 1 < r.size(); ++i) order.push_back(i);
+    std::sort(order.begin(), order.end(), [&](size_t x, size_t y) { return r[x] > r[y]; });
+    Log("measure: each option vs Game %.2f ms (start %.2f, end %.2f), costliest first:", base, r.front(), r.back());
+    std::string sum;
+    for (size_t k = 0; k < order.size(); ++k) {
+        size_t i = order[k];
+        Log("measure:   %+6.1f%%  %+6.2f ms  %s", (r[i] / base - 1) * 100, r[i] - base, g_measure.stages[i].label.c_str());
+        if (k < 4) {
+            snprintf(line, sizeof(line), "%s%s %+.0f%%", k ? ", " : "Costliest: ", g_measure.stages[i].label.c_str(),
+                     (r[i] / base - 1) * 100);
+            sum += line;
+        }
+    }
+    g_measure.summary = sum + " (all in " FOT_PRODUCT ".log)";
+}
+
+void MeasureOnFrame(float ms, bool focused) {
+    if (!g_measure.running) return;
+    if (!focused) return FinishMeasure("stopped: the game lost focus");
+    ULONGLONG now = GetTickCount64();
+    if (!g_measure.sampling) {
+        if (now - g_measure.stageStart >= g_measure.settleMs) g_measure.sampling = true, g_measure.stageStart = now;
+        return;
+    }
+    g_measure.samples.push_back(ms);
+    if (now - g_measure.stageStart < g_measure.sampleMs) return;
+    float avg = Mean(g_measure.samples);
+    g_measure.resultMs[g_measure.stage] = avg;
+    Log("measure: %s %.2f ms average (%.1f fps) over %zu frames", g_measure.stages[g_measure.stage].label.c_str(), avg,
+        1000.0f / avg, g_measure.samples.size());
+    g_measure.samples.clear();
+    g_measure.sampling = false;
+    g_measure.stageStart = now;
+    if (++g_measure.stage < g_measure.stages.size()) {
+        ApplyStage(g_measure.stages[g_measure.stage]);
+        return;
+    }
+    g_measure.done = true;
+    SummarizeMeasure();
+    FinishMeasure("done");
+}
+
+bool GameFocused() {
+    DWORD pid = 0;
+    HWND fg = GetForegroundWindow();
+    return fg && GetWindowThreadProcessId(fg, &pid) && pid == GetCurrentProcessId();
+}
+
+void FrameOnPresent() {
+    static int64_t last = 0;
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    float ms = last ? static_cast<float>((t.QuadPart - last) * 1000.0 / g_qpcFreq) : 0;
+    last = t.QuadPart;
+    bool focused = GameFocused();
+    if (!ms || !focused || ms > 500) {
+        if (g_measure.running && !focused) MeasureOnFrame(ms, false);
+        return;
+    }
+    if (g_frameMs.size() < kFrameRing)
+        g_frameMs.push_back(ms);
+    else
+        g_frameMs[g_framePos] = ms;
+    g_framePos = (g_framePos + 1) % kFrameRing;
+    MeasureOnFrame(ms, true);
+}
+
 // ---------------------------------------------------------------- shader replacement
 
 // Game shaders swapped for FallenOrderTweaks' own when the game creates them, matched by DXBC
@@ -876,6 +1157,7 @@ void OnPresent(command_queue*, swapchain* sc, const rect*, const rect*, uint32_t
         g_outputHeight = desc.texture.height;
     }
     if (!FindManager()) return;
+    FrameOnPresent();
     ApplySettings();
     ApplyOverrides();
     if (g_frames % 60 == 0) CheckOverrides();
@@ -1182,6 +1464,52 @@ void DrawAdvanced() {
     }
 }
 
+// The preset picker, the frame time, and the measure buttons, above the tabs.
+void DrawPresets() {
+    const bool measuring = g_measure.running;
+    ImGui::BeginDisabled(measuring);
+    const int current = CurrentPreset();
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+    if (ImGui::BeginCombo("Quality preset", current >= 0 ? kPresets[current].label : "Custom")) {
+        for (int i = 0; i < kPresetCount; ++i) {
+            std::string item = kPresets[i].label;
+            if (*kPresets[i].cost) item += std::string(" (") + kPresets[i].cost + ")";
+            if (ImGui::Selectable(item.c_str(), i == current) && i != current) ApplyPreset(i);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", kPresets[i].tip);
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    Help("Sets the detail, shadow and lighting settings together (the DLSS mode, texture sharpness and "
+         "camera settings are left alone). Measure preset costs checks them on your PC. Changing a setting "
+         "afterwards shows Custom.");
+    float ms = Mean(g_frameMs);
+    if (ms > 0) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("   %.1f ms (%.0f fps)", ms, 1000.0f / ms);
+    }
+    if (measuring) {
+        ImGui::TextColored(kWarn, "Measuring %s (%zu of %zu)... keep the camera still.",
+                           g_measure.stages[g_measure.stage].label.c_str(), g_measure.stage + 1, g_measure.stages.size());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Stop")) FinishMeasure("stopped");
+        return;
+    }
+    if (ImGui::SmallButton("Measure preset costs")) StartMeasure(false);
+    Help("Runs Game and each preset for 13 s (5 s to settle, 8 s measured) and shows how much longer each "
+         "frame takes than with Game. Stand still in a typical scene, close the overlay and leave the mouse "
+         "alone. Your settings come back afterwards. GTAO and soft shadows only count if they were on when "
+         "the game started.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Measure each option")) StartMeasure(true);
+    Help("Runs every choice the presets use on its own (10 s each, about 5 minutes in all) and writes how much "
+         "each one costs to " FOT_PRODUCT ".log, costliest first.");
+    if (g_measure.done)
+        Note(g_measure.summary.c_str());
+    else if (!g_measure.note.empty())
+        Note(("Measurement " + g_measure.note + ".").c_str(), true);
+}
+
 void DrawOverlay(effect_runtime*) {
     std::lock_guard lock(g_mutex);
     ImGui::TextDisabled(FOT_PRODUCT " " FOT_VERSION "  -  hover a setting for details; saved and applied at every start");
@@ -1194,6 +1522,10 @@ void DrawOverlay(effect_runtime*) {
         return;
     }
     if (g_timestamp != kKnownTimestamp) Note("A different game build than the one analysed; the layout check passed.", true);
+    ImGui::Spacing();
+    DrawPresets();
+    ImGui::Spacing();
+    if (g_measure.running) return;  // the settings belong to the measurement until it ends
     if (!ImGui::BeginTabBar("##tabs")) return;
     struct Tab {
         const char* name;
@@ -1214,6 +1546,9 @@ void Install() {
     OpenLog();
     LogGameInfo();
     InitSettings();
+    LARGE_INTEGER f;
+    QueryPerformanceFrequency(&f);
+    g_qpcFreq = f.QuadPart;
     reshade::register_event<reshade::addon_event::create_pipeline>(&OnCreatePipeline);
     reshade::register_event<reshade::addon_event::init_device>(&OnInitDevice);
     reshade::register_event<reshade::addon_event::present>(&OnPresent);

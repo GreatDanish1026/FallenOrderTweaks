@@ -3,6 +3,11 @@
 A ReShade add-on for **Star Wars Jedi: Fallen Order** (PC) that sets the game's graphics from
 the ReShade overlay: no Engine.ini, no launcher.
 
+A **Quality preset** picker sets the detail, shadow and lighting settings together: Game,
+**Ultra+** (the defaults) or **Cinematic** (every setting at its top choice). **Measure preset
+costs** times each preset in your own scene and shows how much longer frames take than with
+Game; **Measure each option** writes the cost of every setting to the log.
+
 The overlay has one tab per area. Every setting has a **Game** choice (the game's own
 behaviour), and hovering it explains it and shows the game's value.
 

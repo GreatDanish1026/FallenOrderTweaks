@@ -268,3 +268,14 @@ depth of field `r.DepthOfFieldQuality 0` (or the High quality accumulator); vign
 5 + grain jitter); lens flares `r.LensFlareQuality 0`. Vignette changes the tonemapper permutation; HDR with
 Luma still looks right with it off (tested 2026-10-25). `rs.CameraShakeMultiplier` exists but
 couldn't be tested, so it isn't offered.
+
+## Presets (1.2.0)
+
+Quality presets as in LostRecordsTweaks: Game, Ultra+ (the add-on's defaults) and Cinematic,
+over every quality setting (camera settings, taste, are in none). The picker shows Custom when
+the settings match no preset. "Measure preset costs" runs Game and each preset for 5 s to
+settle and 8 s measured, averaging the time between presents (the mean, since frame generation
+alternates intervals); "Measure each option" runs every choice a preset uses on its own (4 s +
+6 s) and logs them costliest first. Settings come back afterwards; the measurement stops if the
+game loses focus. Costs not measured yet.
+
